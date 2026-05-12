@@ -1,6 +1,9 @@
 """Application entry point for the Crypto Radar Agent."""
 
 from app.binance.client import BinancePublicClient, klines_to_dataframe
+from app.indicators.breakout import calculate_breakout_strength
+from app.indicators.momentum import calculate_price_momentum
+from app.indicators.volume import calculate_volume_spike
 
 
 def main() -> None:
@@ -23,6 +26,17 @@ def main() -> None:
     print(f"Latest BTCUSDT candle volume: {latest_candle['volume']}")
     print(f"Latest candle open_time: {latest_candle['open_time']}")
     print(f"Latest candle close_time: {latest_candle['close_time']}")
+
+    volume_signal = calculate_volume_spike(candles)
+    momentum_signal = calculate_price_momentum(candles)
+    breakout_signal = calculate_breakout_strength(candles)
+
+    print("Volume indicator:")
+    print(volume_signal)
+    print("Momentum indicator:")
+    print(momentum_signal)
+    print("Breakout indicator:")
+    print(breakout_signal)
 
 
 if __name__ == "__main__":
