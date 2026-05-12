@@ -4,6 +4,7 @@ from app.binance.client import BinancePublicClient, klines_to_dataframe
 from app.indicators.breakout import calculate_breakout_strength
 from app.indicators.momentum import calculate_price_momentum
 from app.indicators.volume import calculate_volume_spike
+from app.scoring.opportunity_score import calculate_opportunity_score
 
 
 def main() -> None:
@@ -37,6 +38,15 @@ def main() -> None:
     print(momentum_signal)
     print("Breakout indicator:")
     print(breakout_signal)
+
+    opportunity_result = calculate_opportunity_score(
+        volume_signal,
+        momentum_signal,
+        breakout_signal,
+    )
+
+    print("Opportunity score:")
+    print(opportunity_result)
 
 
 if __name__ == "__main__":
