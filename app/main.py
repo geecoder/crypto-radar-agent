@@ -1,10 +1,8 @@
 """Application entry point for the Crypto Radar Agent."""
 
-from app.binance.client import BinancePublicClient, klines_to_dataframe
-from app.indicators.breakout import calculate_breakout_strength
-from app.indicators.momentum import calculate_price_momentum
-from app.indicators.volume import calculate_volume_spike
-from app.scoring.opportunity_score import calculate_opportunity_score
+from app.binance.client import BinancePublicClient
+from app.binance.symbols import get_active_usdt_symbols
+from app.scanner import scan_symbols
 
 
 def main() -> None:
@@ -12,41 +10,34 @@ def main() -> None:
     print("Crypto Radar Agent started")
 
     client = BinancePublicClient()
-    klines = client.get_klines("BTCUSDT", interval="15m", limit=100)
-    candles = klines_to_dataframe(klines)
+    exchange_info = client.get_exchange_info()
+    active_symbols = get_active_usdt_symbols(exchange_info)
 
-    print(f"Candles returned: {len(candles)}")
+    print(f"Total active USDT symbols: {len(active_symbols)}")
+    print("Scanning first 30 active USDT symbols...")
 
-    if candles.empty:
-        print("No BTCUSDT candles returned")
-        return
-
-    latest_candle = candles.iloc[-1]
-
-    print(f"Latest BTCUSDT close price: {latest_candle['close']}")
-    print(f"Latest BTCUSDT candle volume: {latest_candle['volume']}")
-    print(f"Latest candle open_time: {latest_candle['open_time']}")
-    print(f"Latest candle close_time: {latest_candle['close_time']}")
-
-    volume_signal = calculate_volume_spike(candles)
-    momentum_signal = calculate_price_momentum(candles)
-    breakout_signal = calculate_breakout_strength(candles)
-
-    print("Volume indicator:")
-    print(volume_signal)
-    print("Momentum indicator:")
-    print(momentum_signal)
-    print("Breakout indicator:")
-    print(breakout_signal)
-
-    opportunity_result = calculate_opportunity_score(
-        volume_signal,
-        momentum_signal,
-        breakout_signal,
+    opportunities = scan_symbols(
+        client,
+        active_symbols,
+        interval="15m",
+        limit=100,
+        max_symbols=30,
     )
 
-    print("Opportunity score:")
-    print(opportunity_result)
+    print("Top 10 opportunities:")
+    print("Symbol | Score | Classification | Target Bucket | Risk | Latest Close")
+    print("-" * 78)
+
+    for result in opportunities[:10]:
+        opportunity = result["opportunity"]
+        print(
+            f"{result['symbol']} | "
+            f"{opportunity['opportunity_score']} | "
+            f"{opportunity['classification']} | "
+            f"{opportunity['target_bucket']} | "
+            f"{opportunity['risk_level']} | "
+            f"{result['latest_close']}"
+        )
 
 
 if __name__ == "__main__":
