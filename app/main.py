@@ -1,15 +1,37 @@
 """Application entry point for the Crypto Radar Agent."""
 
+import argparse
+
+from app.alerts.telegram import send_telegram_message
 from app.binance.client import BinancePublicClient
 from app.binance.market_filter import select_priority_symbols
 from app.binance.symbols import get_active_usdt_symbols
 from app.reporting import format_opportunity_table, format_top_opportunity_detail
 from app.scanner import get_alert_candidates, get_best_setups, scan_symbols
 
+TELEGRAM_TEST_MESSAGE = "✅ Crypto Radar Agent Telegram test message."
+
+
+def parse_args() -> argparse.Namespace:
+    """Parse command-line arguments."""
+    parser = argparse.ArgumentParser(description="Run the Crypto Radar Agent.")
+    parser.add_argument(
+        "--test-telegram",
+        action="store_true",
+        help="Send a Telegram test message and exit.",
+    )
+    return parser.parse_args()
+
 
 def main() -> None:
     """Start the MVP application."""
     print("Crypto Radar Agent started")
+
+    args = parse_args()
+
+    if args.test_telegram:
+        send_telegram_message(TELEGRAM_TEST_MESSAGE)
+        return
 
     client = BinancePublicClient()
     exchange_info = client.get_exchange_info()
