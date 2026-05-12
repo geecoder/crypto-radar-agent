@@ -3,7 +3,24 @@
 from app.binance.client import BinancePublicClient
 from app.binance.market_filter import select_priority_symbols
 from app.binance.symbols import get_active_usdt_symbols
-from app.scanner import scan_symbols
+from app.scanner import get_alert_candidates, get_best_setups, scan_symbols
+
+
+def print_opportunity_table(results: list[dict]) -> None:
+    """Print opportunity scan results in a simple table."""
+    print("Symbol | Score | Classification | Target Bucket | Risk | Latest Close")
+    print("-" * 78)
+
+    for result in results:
+        opportunity = result["opportunity"]
+        print(
+            f"{result['symbol']} | "
+            f"{opportunity['opportunity_score']} | "
+            f"{opportunity['classification']} | "
+            f"{opportunity['target_bucket']} | "
+            f"{opportunity['risk_level']} | "
+            f"{result['latest_close']}"
+        )
 
 
 def main() -> None:
@@ -33,20 +50,16 @@ def main() -> None:
         max_symbols=50,
     )
 
-    print("Top 10 opportunities:")
-    print("Symbol | Score | Classification | Target Bucket | Risk | Latest Close")
-    print("-" * 78)
+    alert_candidates = get_alert_candidates(opportunities, minimum_score=60)
 
-    for result in opportunities[:10]:
-        opportunity = result["opportunity"]
-        print(
-            f"{result['symbol']} | "
-            f"{opportunity['opportunity_score']} | "
-            f"{opportunity['classification']} | "
-            f"{opportunity['target_bucket']} | "
-            f"{opportunity['risk_level']} | "
-            f"{result['latest_close']}"
-        )
+    if alert_candidates:
+        print("🚨 Alert candidates:")
+        print_opportunity_table(alert_candidates)
+        return
+
+    print("No strong opportunities detected right now.")
+    print("Best weak setups:")
+    print_opportunity_table(get_best_setups(opportunities, limit=10))
 
 
 if __name__ == "__main__":

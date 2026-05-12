@@ -11,6 +11,19 @@ from app.scoring.opportunity_score import calculate_opportunity_score
 SCAN_DELAY_SECONDS = 0.1
 
 
+def _get_opportunity_score(result: dict) -> int:
+    """Read an opportunity score safely from a scan result."""
+    try:
+        return int(result.get("opportunity", {}).get("opportunity_score", 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _get_valid_results(results: list[dict]) -> list[dict]:
+    """Return scan results that do not contain errors."""
+    return [result for result in results if "error" not in result]
+
+
 def scan_symbol(
     client,
     symbol: str,
@@ -72,6 +85,28 @@ def scan_symbols(
 
     return sorted(
         results,
-        key=lambda result: result["opportunity"]["opportunity_score"],
+        key=_get_opportunity_score,
         reverse=True,
     )
+
+
+def get_alert_candidates(
+    results: list[dict],
+    minimum_score: int = 60,
+) -> list[dict]:
+    """Return valid scan results that meet the alert score threshold."""
+    candidates = [
+        result
+        for result in _get_valid_results(results)
+        if _get_opportunity_score(result) >= minimum_score
+    ]
+
+    return sorted(candidates, key=_get_opportunity_score, reverse=True)
+
+
+def get_best_setups(results: list[dict], limit: int = 10) -> list[dict]:
+    """Return the highest-scoring valid scan results."""
+    valid_results = _get_valid_results(results)
+    sorted_results = sorted(valid_results, key=_get_opportunity_score, reverse=True)
+
+    return sorted_results[:limit]

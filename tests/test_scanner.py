@@ -1,6 +1,11 @@
 """Tests for multi-symbol scanning helpers."""
 
-from app.scanner import scan_symbol, scan_symbols
+from app.scanner import (
+    get_alert_candidates,
+    get_best_setups,
+    scan_symbol,
+    scan_symbols,
+)
 
 
 class FakeClient:
@@ -89,3 +94,53 @@ def test_scan_symbols_limits_skips_errors_and_sorts_results(monkeypatch) -> None
     )
 
     assert [result["symbol"] for result in results] == ["BBBUSDT", "AAAUSDT"]
+
+
+def test_get_alert_candidates_filters_errors_and_minimum_score() -> None:
+    results = [
+        {
+            "symbol": "AAAUSDT",
+            "opportunity": {"opportunity_score": 60},
+        },
+        {
+            "symbol": "BBBUSDT",
+            "opportunity": {"opportunity_score": 85},
+        },
+        {
+            "symbol": "CCCUSDT",
+            "opportunity": {"opportunity_score": 59},
+        },
+        {
+            "symbol": "BADUSDT",
+            "error": "failed",
+        },
+    ]
+
+    candidates = get_alert_candidates(results, minimum_score=60)
+
+    assert [result["symbol"] for result in candidates] == ["BBBUSDT", "AAAUSDT"]
+
+
+def test_get_best_setups_filters_errors_sorts_and_limits_results() -> None:
+    results = [
+        {
+            "symbol": "AAAUSDT",
+            "opportunity": {"opportunity_score": 20},
+        },
+        {
+            "symbol": "BBBUSDT",
+            "opportunity": {"opportunity_score": 80},
+        },
+        {
+            "symbol": "CCCUSDT",
+            "opportunity": {"opportunity_score": 40},
+        },
+        {
+            "symbol": "BADUSDT",
+            "error": "failed",
+        },
+    ]
+
+    best_setups = get_best_setups(results, limit=2)
+
+    assert [result["symbol"] for result in best_setups] == ["BBBUSDT", "CCCUSDT"]
