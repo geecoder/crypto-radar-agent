@@ -17,6 +17,9 @@ env/
 # Environment files
 .env
 
+# Local alert state
+data/alert_state.json
+
 # IDE/editor
 .idea/
 .vscode/

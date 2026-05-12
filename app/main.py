@@ -2,6 +2,7 @@
 
 import argparse
 
+from app.alerts.alert_state import record_alert, should_send_alert
 from app.alerts.telegram import send_telegram_message
 from app.binance.client import BinancePublicClient
 from app.binance.market_filter import select_priority_symbols
@@ -25,6 +26,14 @@ def parse_args() -> argparse.Namespace:
         help="Send a Telegram test message and exit.",
     )
     return parser.parse_args()
+
+
+def _get_opportunity_score(result: dict) -> int:
+    """Read the opportunity score from a scan result."""
+    try:
+        return int(result.get("opportunity", {}).get("opportunity_score", 0))
+    except (TypeError, ValueError):
+        return 0
 
 
 def main() -> None:
@@ -67,7 +76,29 @@ def main() -> None:
         print(format_opportunity_table(alert_candidates))
         print()
         print(format_top_opportunity_detail(alert_candidates[0]))
-        send_telegram_message(format_alert_message(alert_candidates))
+
+        candidates_to_send = []
+
+        for candidate in alert_candidates:
+            symbol = candidate.get("symbol", "")
+            score = _get_opportunity_score(candidate)
+            should_send, reason = should_send_alert(symbol, score)
+
+            if should_send:
+                candidates_to_send.append(candidate)
+            else:
+                print(f"{symbol}: {reason}")
+
+        if not candidates_to_send:
+            print("Alert candidates found, but all were suppressed by cooldown.")
+            return
+
+        message_sent = send_telegram_message(format_alert_message(candidates_to_send))
+
+        if message_sent:
+            for candidate in candidates_to_send:
+                record_alert(candidate["symbol"], _get_opportunity_score(candidate))
+
         return
 
     best_setups = get_best_setups(opportunities, limit=10)
