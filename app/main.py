@@ -1,6 +1,7 @@
 """Application entry point for the Crypto Radar Agent."""
 
 from app.binance.client import BinancePublicClient
+from app.binance.symbols import get_active_usdt_symbols
 
 
 def main() -> None:
@@ -8,11 +9,11 @@ def main() -> None:
     print("Crypto Radar Agent started")
 
     client = BinancePublicClient()
-    tickers = client.get_24hr_tickers()
-    ticker_symbols = [ticker["symbol"] for ticker in tickers[:5]]
+    exchange_info = client.get_exchange_info()
+    symbols = get_active_usdt_symbols(exchange_info)
 
-    print(f"24hr tickers returned: {len(tickers)}")
-    print(f"First 5 ticker symbols: {ticker_symbols}")
+    print(f"Active USDT symbols: {len(symbols)}")
+    print(f"First 20 symbols: {symbols[:20]}")
 
 
 if __name__ == "__main__":
