@@ -14,6 +14,8 @@ def test_select_priority_symbols_filters_and_ranks_by_priority_score() -> None:
         "BTCEUR",
         "BAD-USDT",
         "badUSDT",
+        "USD1USDT",
+        "PAXGUSDT",
     ]
     tickers_24hr = [
         {
@@ -75,6 +77,18 @@ def test_select_priority_symbols_filters_and_ranks_by_priority_score() -> None:
             "quoteVolume": "600000000",
             "priceChangePercent": "10.0",
             "count": "1200000",
+        },
+        {
+            "symbol": "USD1USDT",
+            "quoteVolume": "900000000",
+            "priceChangePercent": "25.0",
+            "count": "2000000",
+        },
+        {
+            "symbol": "PAXGUSDT",
+            "quoteVolume": "900000000",
+            "priceChangePercent": "25.0",
+            "count": "2000000",
         },
     ]
 

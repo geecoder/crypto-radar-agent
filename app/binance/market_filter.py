@@ -2,6 +2,11 @@
 
 import re
 
+from app.binance.symbols import (
+    COMMODITY_OR_SYNTHETIC_BASE_ASSETS,
+    STABLE_OR_FIAT_BASE_ASSETS,
+)
+
 SYMBOL_PATTERN = re.compile(r"^[A-Z0-9]+$")
 
 
@@ -63,6 +68,19 @@ def _is_uppercase_alphanumeric(value: str) -> bool:
     return isinstance(value, str) and SYMBOL_PATTERN.fullmatch(value) is not None
 
 
+def _get_usdt_base_symbol(symbol: str) -> str:
+    """Return the base symbol for a USDT pair."""
+    return symbol[:-4]
+
+
+def _is_excluded_base_symbol(base_symbol: str) -> bool:
+    """Return True when a base symbol is stable, fiat, commodity, or synthetic."""
+    return (
+        base_symbol in STABLE_OR_FIAT_BASE_ASSETS
+        or base_symbol in COMMODITY_OR_SYNTHETIC_BASE_ASSETS
+    )
+
+
 def select_priority_symbols(
     active_symbols: list[str],
     tickers_24hr: list[dict],
@@ -82,6 +100,11 @@ def select_priority_symbols(
             continue
 
         if not symbol.endswith("USDT"):
+            continue
+
+        base_symbol = _get_usdt_base_symbol(symbol)
+
+        if _is_excluded_base_symbol(base_symbol):
             continue
 
         quote_volume = _safe_float(ticker.get("quoteVolume"))

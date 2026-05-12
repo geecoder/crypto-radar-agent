@@ -19,7 +19,7 @@ LEVERAGED_TOKEN_KEYWORDS = (
     "5L",
     "5S",
 )
-STABLECOIN_OR_FIAT_ASSETS = {
+STABLE_OR_FIAT_BASE_ASSETS = {
     "USDT",
     "USDC",
     "FDUSD",
@@ -39,6 +39,13 @@ STABLECOIN_OR_FIAT_ASSETS = {
     "USTC",
     "USDE",
     "EURC",
+    "EURI",
+    "XUSD",
+    "RLUSD",
+}
+COMMODITY_OR_SYNTHETIC_BASE_ASSETS = {
+    "PAXG",
+    "XAUT",
 }
 
 
@@ -81,7 +88,10 @@ def get_active_usdt_symbols(exchange_info: dict) -> list[str]:
         ):
             continue
 
-        if base_asset in STABLECOIN_OR_FIAT_ASSETS:
+        if base_asset in STABLE_OR_FIAT_BASE_ASSETS:
+            continue
+
+        if base_asset in COMMODITY_OR_SYNTHETIC_BASE_ASSETS:
             continue
 
         active_symbols.append(symbol)
