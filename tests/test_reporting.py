@@ -1,6 +1,10 @@
 """Tests for text reporting helpers."""
 
-from app.reporting import format_opportunity_table, format_top_opportunity_detail
+from app.reporting import (
+    format_alert_message,
+    format_opportunity_table,
+    format_top_opportunity_detail,
+)
 
 
 def _sample_result() -> dict:
@@ -63,3 +67,28 @@ def test_format_top_opportunity_detail_shows_not_available_for_missing_signal() 
 
     assert "Trend signal: Not available" in detail
     assert "This setup is weak. The signals are not sufficiently aligned." in detail
+
+
+def test_format_alert_message_returns_telegram_html() -> None:
+    message = format_alert_message([_sample_result()])
+
+    assert "<b>🚨 Crypto Radar Alert Candidates</b>" in message
+    assert "<b>BTCUSDT</b>" in message
+    assert "Opportunity score: 72" in message
+    assert "Classification: Watchlist" in message
+    assert "Target bucket: +20% momentum setup" in message
+    assert "Risk level: Medium" in message
+    assert "Latest close: 100.5" in message
+    assert "Summary: Watchlist. Some signals are improving." in message
+    assert "Not financial advice. Use this as a monitoring signal only." in message
+
+
+def test_format_alert_message_escapes_html_values() -> None:
+    result = _sample_result()
+    result["symbol"] = "BAD<USDT"
+    result["opportunity"]["summary"] = "Price < resistance & volume > average"
+
+    message = format_alert_message([result])
+
+    assert "BAD&lt;USDT" in message
+    assert "Price &lt; resistance &amp; volume &gt; average" in message

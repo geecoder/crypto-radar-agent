@@ -1,5 +1,7 @@
 """Text reporting helpers for scan results."""
 
+from html import escape
+
 
 def _safe_opportunity_score(opportunity: dict) -> int:
     """Read an opportunity score safely."""
@@ -89,5 +91,43 @@ def format_top_opportunity_detail(result: dict) -> str:
         "Interpretation:",
         _get_interpretation(opportunity_score),
     ]
+
+    return "\n".join(lines)
+
+
+def format_alert_message(alert_candidates: list[dict]) -> str:
+    """Return a Telegram-friendly HTML alert message for scan candidates."""
+    lines = ["<b>🚨 Crypto Radar Alert Candidates</b>"]
+
+    for candidate in alert_candidates:
+        opportunity = candidate.get("opportunity", {})
+        lines.extend(
+            [
+                "",
+                f"<b>{escape(str(candidate.get('symbol', 'Not available')))}</b>",
+                (
+                    "Opportunity score: "
+                    f"{escape(str(opportunity.get('opportunity_score', 'Not available')))}"
+                ),
+                (
+                    "Classification: "
+                    f"{escape(str(opportunity.get('classification', 'Not available')))}"
+                ),
+                (
+                    "Target bucket: "
+                    f"{escape(str(opportunity.get('target_bucket', 'Not available')))}"
+                ),
+                f"Risk level: {escape(str(opportunity.get('risk_level', 'Not available')))}",
+                f"Latest close: {escape(str(candidate.get('latest_close', 'Not available')))}",
+                f"Summary: {escape(str(opportunity.get('summary', 'Not available')))}",
+            ]
+        )
+
+    lines.extend(
+        [
+            "",
+            "Not financial advice. Use this as a monitoring signal only.",
+        ]
+    )
 
     return "\n".join(lines)

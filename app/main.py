@@ -6,7 +6,11 @@ from app.alerts.telegram import send_telegram_message
 from app.binance.client import BinancePublicClient
 from app.binance.market_filter import select_priority_symbols
 from app.binance.symbols import get_active_usdt_symbols
-from app.reporting import format_opportunity_table, format_top_opportunity_detail
+from app.reporting import (
+    format_alert_message,
+    format_opportunity_table,
+    format_top_opportunity_detail,
+)
 from app.scanner import get_alert_candidates, get_best_setups, scan_symbols
 
 TELEGRAM_TEST_MESSAGE = "✅ Crypto Radar Agent Telegram test message."
@@ -63,11 +67,13 @@ def main() -> None:
         print(format_opportunity_table(alert_candidates))
         print()
         print(format_top_opportunity_detail(alert_candidates[0]))
+        send_telegram_message(format_alert_message(alert_candidates))
         return
 
     best_setups = get_best_setups(opportunities, limit=10)
 
     print("No strong opportunities detected right now.")
+    print("No Telegram alert sent.")
     print("Best weak setups:")
     print(format_opportunity_table(best_setups))
 
