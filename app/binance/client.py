@@ -6,6 +6,7 @@ keys and does not place trades.
 
 from typing import Any
 
+import pandas as pd
 import requests
 
 from app.config import settings
@@ -57,7 +58,7 @@ class BinancePublicClient:
         interval: str = "15m",
         limit: int = 100,
     ) -> list[list[Any]]:
-        """Return candlestick data for a Spot symbol.
+        """Return candlestick data from Binance ``/api/v3/klines``.
 
         Args:
             symbol: Trading pair symbol, such as ``BTCUSDT``.
@@ -76,3 +77,45 @@ class BinancePublicClient:
         )
         response.raise_for_status()
         return response.json()
+
+
+def klines_to_dataframe(klines: list) -> pd.DataFrame:
+    """Convert Binance kline rows into a simple candle DataFrame.
+
+    The Binance kline endpoint returns each candle as a list. This helper keeps
+    only the fields needed for the MVP and converts prices, volume, and times
+    into easier-to-use pandas types.
+    """
+    columns = [
+        "open_time",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+        "close_time",
+    ]
+    rows = [
+        {
+            "open_time": kline[0],
+            "open": kline[1],
+            "high": kline[2],
+            "low": kline[3],
+            "close": kline[4],
+            "volume": kline[5],
+            "close_time": kline[6],
+        }
+        for kline in klines
+    ]
+    candles = pd.DataFrame(rows, columns=columns)
+
+    if candles.empty:
+        return candles
+
+    candles["open_time"] = pd.to_datetime(candles["open_time"], unit="ms")
+    candles["close_time"] = pd.to_datetime(candles["close_time"], unit="ms")
+
+    for column in ["open", "high", "low", "close", "volume"]:
+        candles[column] = candles[column].astype(float)
+
+    return candles
