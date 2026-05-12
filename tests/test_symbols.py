@@ -55,6 +55,62 @@ def test_get_active_usdt_symbols_filters_to_regular_trading_spot_symbols() -> No
                 "status": "TRADING",
                 "isSpotTradingAllowed": True,
             },
+            {
+                "symbol": "USD1USDT",
+                "baseAsset": "USD1",
+                "quoteAsset": "USDT",
+                "status": "TRADING",
+                "isSpotTradingAllowed": True,
+            },
+            {
+                "symbol": "USDEUSDT",
+                "baseAsset": "USDE",
+                "quoteAsset": "USDT",
+                "status": "TRADING",
+                "isSpotTradingAllowed": True,
+            },
+            {
+                "symbol": "BTC3LUSDT",
+                "baseAsset": "BTC3L",
+                "quoteAsset": "USDT",
+                "status": "TRADING",
+                "isSpotTradingAllowed": True,
+            },
+            {
+                "symbol": "ETH5SUSDT",
+                "baseAsset": "ETH5S",
+                "quoteAsset": "USDT",
+                "status": "TRADING",
+                "isSpotTradingAllowed": True,
+            },
+            {
+                "symbol": "BAD-USDT",
+                "baseAsset": "BAD",
+                "quoteAsset": "USDT",
+                "status": "TRADING",
+                "isSpotTradingAllowed": True,
+            },
+            {
+                "symbol": "badUSDT",
+                "baseAsset": "bad",
+                "quoteAsset": "USDT",
+                "status": "TRADING",
+                "isSpotTradingAllowed": True,
+            },
+            {
+                "symbol": "ODDUSDT",
+                "baseAsset": "ODD-BASE",
+                "quoteAsset": "USDT",
+                "status": "TRADING",
+                "isSpotTradingAllowed": True,
+            },
+            {
+                "symbol": "UNICODEUSDT",
+                "baseAsset": "UNICODEÁ",
+                "quoteAsset": "USDT",
+                "status": "TRADING",
+                "isSpotTradingAllowed": True,
+            },
         ]
     }
 

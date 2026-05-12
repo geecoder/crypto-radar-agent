@@ -1,5 +1,9 @@
 """Market selection helpers for Binance public ticker data."""
 
+import re
+
+SYMBOL_PATTERN = re.compile(r"^[A-Z0-9]+$")
+
 
 def _safe_float(value) -> float:
     """Convert a value to float, returning 0.0 if conversion fails."""
@@ -54,6 +58,11 @@ def _activity_score(count: int) -> int:
     return 5
 
 
+def _is_uppercase_alphanumeric(value: str) -> bool:
+    """Return True when a ticker symbol is strictly uppercase alphanumeric."""
+    return isinstance(value, str) and SYMBOL_PATTERN.fullmatch(value) is not None
+
+
 def select_priority_symbols(
     active_symbols: list[str],
     tickers_24hr: list[dict],
@@ -64,9 +73,12 @@ def select_priority_symbols(
     scored_symbols = []
 
     for ticker in tickers_24hr:
-        symbol = ticker.get("symbol", "")
+        symbol = ticker.get("symbol") or ""
 
         if symbol not in active_symbol_set:
+            continue
+
+        if not _is_uppercase_alphanumeric(symbol):
             continue
 
         if not symbol.endswith("USDT"):

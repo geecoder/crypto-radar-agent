@@ -12,6 +12,8 @@ def test_select_priority_symbols_filters_and_ranks_by_priority_score() -> None:
         "QUIETUSDT",
         "BADUSDT",
         "BTCEUR",
+        "BAD-USDT",
+        "badUSDT",
     ]
     tickers_24hr = [
         {
@@ -58,6 +60,18 @@ def test_select_priority_symbols_filters_and_ranks_by_priority_score() -> None:
         },
         {
             "symbol": "BTCEUR",
+            "quoteVolume": "600000000",
+            "priceChangePercent": "10.0",
+            "count": "1200000",
+        },
+        {
+            "symbol": "BAD-USDT",
+            "quoteVolume": "600000000",
+            "priceChangePercent": "10.0",
+            "count": "1200000",
+        },
+        {
+            "symbol": "badUSDT",
             "quoteVolume": "600000000",
             "priceChangePercent": "10.0",
             "count": "1200000",

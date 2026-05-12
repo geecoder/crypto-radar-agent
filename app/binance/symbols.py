@@ -1,8 +1,24 @@
 """Symbol helpers for Binance public market data."""
 
+import re
+
 DEFAULT_WATCHLIST = ("BTCUSDT", "ETHUSDT", "BNBUSDT")
 
-LEVERAGED_TOKEN_KEYWORDS = ("UP", "DOWN", "BULL", "BEAR")
+SYMBOL_PATTERN = re.compile(r"^[A-Z0-9]+$")
+LEVERAGED_TOKEN_KEYWORDS = (
+    "UP",
+    "DOWN",
+    "BULL",
+    "BEAR",
+    "2L",
+    "2S",
+    "3L",
+    "3S",
+    "4L",
+    "4S",
+    "5L",
+    "5S",
+)
 STABLECOIN_OR_FIAT_ASSETS = {
     "USDT",
     "USDC",
@@ -17,20 +33,32 @@ STABLECOIN_OR_FIAT_ASSETS = {
     "AUD",
     "BIDR",
     "AEUR",
+    "USD1",
+    "USDP",
+    "PAX",
+    "USTC",
+    "USDE",
+    "EURC",
 }
+
+
+def _is_uppercase_alphanumeric(value: str) -> bool:
+    """Return True when a symbol value is strictly uppercase alphanumeric."""
+    return isinstance(value, str) and SYMBOL_PATTERN.fullmatch(value) is not None
 
 
 def get_active_usdt_symbols(exchange_info: dict) -> list[str]:
     """Return active Spot USDT symbols from Binance exchange info.
 
     The filter keeps regular USDT-quoted Spot markets and removes inactive
-    symbols, leveraged tokens, and stablecoin or fiat-like base assets.
+    symbols, low-quality names, leveraged tokens, and stablecoin or fiat-like
+    base assets.
     """
     active_symbols = []
 
     for symbol_info in exchange_info.get("symbols", []):
-        symbol = symbol_info.get("symbol", "")
-        base_asset = symbol_info.get("baseAsset", "")
+        symbol = symbol_info.get("symbol") or ""
+        base_asset = symbol_info.get("baseAsset") or ""
 
         if symbol_info.get("quoteAsset") != "USDT":
             continue
@@ -41,7 +69,16 @@ def get_active_usdt_symbols(exchange_info: dict) -> list[str]:
         if not symbol_info.get("isSpotTradingAllowed", True):
             continue
 
-        if any(keyword in symbol for keyword in LEVERAGED_TOKEN_KEYWORDS):
+        if not _is_uppercase_alphanumeric(symbol):
+            continue
+
+        if not _is_uppercase_alphanumeric(base_asset):
+            continue
+
+        if any(
+            keyword in symbol or keyword in base_asset
+            for keyword in LEVERAGED_TOKEN_KEYWORDS
+        ):
             continue
 
         if base_asset in STABLECOIN_OR_FIAT_ASSETS:
