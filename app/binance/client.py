@@ -9,25 +9,65 @@ from typing import Any
 import pandas as pd
 import requests
 
-from app.config import settings
-
 
 class BinancePublicClient:
     """Small client for Binance public Spot REST market-data endpoints."""
 
+    BASE_URLS = (
+        "https://data-api.binance.vision",
+        "https://api1.binance.com",
+        "https://api2.binance.com",
+        "https://api3.binance.com",
+        "https://api.binance.com",
+    )
+
     def __init__(
         self,
-        base_url: str = settings.binance_base_url,
         timeout: int = 10,
     ) -> None:
         """Create a public Binance client.
 
         Args:
-            base_url: Binance REST API base URL.
             timeout: Request timeout in seconds.
         """
-        self.base_url = base_url.rstrip("/")
+        self.base_urls = tuple(base_url.rstrip("/") for base_url in self.BASE_URLS)
         self.timeout = timeout
+
+    def _get(
+        self,
+        path: str,
+        params: dict[str, Any] | None = None,
+    ) -> Any:
+        """GET a public Binance endpoint, trying all base URLs in order."""
+        failures: list[str] = []
+        last_error: Exception | None = None
+
+        for base_url in self.base_urls:
+            try:
+                response = requests.get(
+                    f"{base_url}{path}",
+                    params=params,
+                    timeout=self.timeout,
+                )
+                response.raise_for_status()
+            except (
+                requests.exceptions.Timeout,
+                requests.exceptions.ConnectionError,
+                requests.exceptions.HTTPError,
+            ) as error:
+                print(f"Binance base URL failed: {base_url} - {error}")
+                failures.append(f"{base_url}: {error}")
+                last_error = error
+                continue
+
+            print(f"Using Binance base URL: {base_url}")
+            return response.json()
+
+        failed_base_urls = "; ".join(failures)
+        raise RuntimeError(
+            "All Binance base URLs failed. Failed base URLs: "
+            f"{failed_base_urls}"
+        ) from last_error
 
     def get_exchange_info(self) -> dict[str, Any]:
         """Return Binance Spot exchange metadata.
@@ -36,21 +76,11 @@ class BinancePublicClient:
         and exchange-level rate-limit metadata from the public exchange-info
         endpoint.
         """
-        response = requests.get(
-            f"{self.base_url}/api/v3/exchangeInfo",
-            timeout=self.timeout,
-        )
-        response.raise_for_status()
-        return response.json()
+        return self._get("/api/v3/exchangeInfo")
 
     def get_24hr_tickers(self) -> list[dict[str, Any]]:
         """Return 24-hour ticker statistics for all Spot symbols."""
-        response = requests.get(
-            f"{self.base_url}/api/v3/ticker/24hr",
-            timeout=self.timeout,
-        )
-        response.raise_for_status()
-        return response.json()
+        return self._get("/api/v3/ticker/24hr")
 
     def get_klines(
         self,
@@ -70,13 +100,7 @@ class BinancePublicClient:
             "interval": interval,
             "limit": limit,
         }
-        response = requests.get(
-            f"{self.base_url}/api/v3/klines",
-            params=params,
-            timeout=self.timeout,
-        )
-        response.raise_for_status()
-        return response.json()
+        return self._get("/api/v3/klines", params=params)
 
 
 def klines_to_dataframe(klines: list) -> pd.DataFrame:
