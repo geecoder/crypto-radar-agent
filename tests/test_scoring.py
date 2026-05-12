@@ -10,7 +10,7 @@ def test_calculate_opportunity_score_weights_indicator_scores() -> None:
         {"score": 0},
     )
 
-    assert result["opportunity_score"] == 36
+    assert result["opportunity_score"] == 25
     assert result["classification"] == "Ignore"
     assert result["target_bucket"] == "No clear upside setup"
     assert result["risk_level"] == "Low"
@@ -18,6 +18,8 @@ def test_calculate_opportunity_score_weights_indicator_scores() -> None:
         "volume": 60,
         "momentum": 40,
         "breakout": 0,
+        "trend": 0,
+        "volatility": 0,
     }
 
 
@@ -26,9 +28,11 @@ def test_calculate_opportunity_score_returns_plus_50_bucket_for_strong_setup() -
         {"score": 100},
         {"score": 80},
         {"score": 80},
+        {"score": 100},
+        {"score": 100},
     )
 
-    assert result["opportunity_score"] == 88
+    assert result["opportunity_score"] == 91
     assert result["classification"] == "Strong watch"
     assert result["target_bucket"] == "+50% speculative setup"
     assert result["risk_level"] == "High"
@@ -38,10 +42,12 @@ def test_calculate_opportunity_score_returns_plus_50_bucket_for_strong_setup() -
 def test_calculate_opportunity_score_treats_missing_scores_as_zero() -> None:
     result = calculate_opportunity_score({}, {"score": 70}, {})
 
-    assert result["opportunity_score"] == 21
+    assert result["opportunity_score"] == 18
     assert result["classification"] == "Ignore"
     assert result["component_scores"] == {
         "volume": 0,
         "momentum": 70,
         "breakout": 0,
+        "trend": 0,
+        "volatility": 0,
     }

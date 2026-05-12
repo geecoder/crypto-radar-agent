@@ -1,8 +1,11 @@
 """Opportunity scoring for combined indicator signals."""
 
 
-def _safe_score(signal: dict) -> int:
+def _safe_score(signal: dict | None) -> int:
     """Read a signal score safely and keep it between 0 and 100."""
+    if signal is None:
+        return 0
+
     try:
         score = int(signal.get("score", 0))
     except (TypeError, ValueError):
@@ -49,27 +52,37 @@ def _get_risk_level(score: int, target_bucket: str) -> str:
 def _build_summary(classification: str, component_scores: dict[str, int]) -> str:
     """Build a short plain-English summary for the score result."""
     aligned = all(score >= 60 for score in component_scores.values())
+    strong_count = sum(score >= 60 for score in component_scores.values())
 
     if aligned:
-        return f"{classification}. Volume, momentum, and breakout signals are aligned."
+        return f"{classification}. Volume, momentum, breakout, trend, and volatility signals are aligned."
 
-    return f"{classification}. Volume, momentum, and breakout signals are not aligned."
+    if strong_count == 0:
+        return f"{classification}. Signals are weak across volume, momentum, breakout, trend, and volatility."
+
+    return f"{classification}. Some signals are improving, but the full signal set is not aligned."
 
 
 def calculate_opportunity_score(
     volume_signal: dict,
     momentum_signal: dict,
     breakout_signal: dict,
+    trend_signal: dict | None = None,
+    volatility_signal: dict | None = None,
 ) -> dict:
     """Calculate a weighted opportunity score from basic signal indicators."""
     volume_score = _safe_score(volume_signal)
     momentum_score = _safe_score(momentum_signal)
     breakout_score = _safe_score(breakout_signal)
+    trend_score = _safe_score(trend_signal)
+    volatility_score = _safe_score(volatility_signal)
 
     opportunity_score = round(
-        (volume_score * 0.40)
-        + (momentum_score * 0.30)
-        + (breakout_score * 0.30)
+        (volume_score * 0.25)
+        + (momentum_score * 0.25)
+        + (breakout_score * 0.20)
+        + (trend_score * 0.15)
+        + (volatility_score * 0.15)
     )
     classification = _classify_score(opportunity_score)
     target_bucket = _get_target_bucket(
@@ -82,6 +95,8 @@ def calculate_opportunity_score(
         "volume": volume_score,
         "momentum": momentum_score,
         "breakout": breakout_score,
+        "trend": trend_score,
+        "volatility": volatility_score,
     }
 
     return {

@@ -57,7 +57,9 @@ def test_scan_symbol_returns_signals_and_opportunity_score() -> None:
     assert result["volume_signal"]["score"] == 100
     assert result["momentum_signal"]["score"] == 100
     assert result["breakout_signal"]["score"] == 100
-    assert result["opportunity"]["opportunity_score"] == 100
+    assert result["trend_signal"]["score"] == 100
+    assert result["volatility_signal"]["score"] == 80
+    assert result["opportunity"]["opportunity_score"] == 97
 
 
 def test_scan_symbol_returns_error_when_symbol_fails() -> None:

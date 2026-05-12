@@ -5,6 +5,8 @@ import time
 from app.binance.client import klines_to_dataframe
 from app.indicators.breakout import calculate_breakout_strength
 from app.indicators.momentum import calculate_price_momentum
+from app.indicators.trend import calculate_trend_alignment
+from app.indicators.volatility import calculate_volatility_potential
 from app.indicators.volume import calculate_volume_spike
 from app.scoring.opportunity_score import calculate_opportunity_score
 
@@ -42,10 +44,14 @@ def scan_symbol(
         volume_signal = calculate_volume_spike(candles)
         momentum_signal = calculate_price_momentum(candles)
         breakout_signal = calculate_breakout_strength(candles)
+        trend_signal = calculate_trend_alignment(candles)
+        volatility_signal = calculate_volatility_potential(candles)
         opportunity = calculate_opportunity_score(
             volume_signal,
             momentum_signal,
             breakout_signal,
+            trend_signal,
+            volatility_signal,
         )
 
         return {
@@ -54,6 +60,8 @@ def scan_symbol(
             "volume_signal": volume_signal,
             "momentum_signal": momentum_signal,
             "breakout_signal": breakout_signal,
+            "trend_signal": trend_signal,
+            "volatility_signal": volatility_signal,
             "opportunity": opportunity,
         }
     except Exception as error:
