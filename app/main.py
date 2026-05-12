@@ -1,6 +1,7 @@
 """Application entry point for the Crypto Radar Agent."""
 
 from app.binance.client import BinancePublicClient
+from app.binance.market_filter import select_priority_symbols
 from app.binance.symbols import get_active_usdt_symbols
 from app.scanner import scan_symbols
 
@@ -12,16 +13,24 @@ def main() -> None:
     client = BinancePublicClient()
     exchange_info = client.get_exchange_info()
     active_symbols = get_active_usdt_symbols(exchange_info)
+    tickers_24hr = client.get_24hr_tickers()
+    priority_symbols = select_priority_symbols(
+        active_symbols,
+        tickers_24hr,
+        max_symbols=50,
+    )
 
     print(f"Total active USDT symbols: {len(active_symbols)}")
-    print("Scanning first 30 active USDT symbols...")
+    print(f"Total priority symbols selected: {len(priority_symbols)}")
+    print(f"First 20 priority symbols: {priority_symbols[:20]}")
+    print("Scanning first 50 priority symbols...")
 
     opportunities = scan_symbols(
         client,
-        active_symbols,
+        priority_symbols,
         interval="15m",
         limit=100,
-        max_symbols=30,
+        max_symbols=50,
     )
 
     print("Top 10 opportunities:")
