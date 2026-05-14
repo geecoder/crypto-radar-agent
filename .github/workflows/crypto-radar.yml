@@ -8,6 +8,7 @@ on:
 jobs:
   scan:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
 
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -31,3 +32,6 @@ jobs:
 
       - name: Run crypto radar scanner
         run: python -m app.main
+
+      - name: Check alert outcomes
+        run: python -m app.main --check-outcomes
