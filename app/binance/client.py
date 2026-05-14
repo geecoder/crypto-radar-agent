@@ -13,14 +13,6 @@ import requests
 class BinancePublicClient:
     """Small client for Binance public Spot REST market-data endpoints."""
 
-    BASE_URLS = (
-        "https://data-api.binance.vision",
-        "https://api1.binance.com",
-        "https://api2.binance.com",
-        "https://api3.binance.com",
-        "https://api.binance.com",
-    )
-
     def __init__(
         self,
         timeout: int = 10,
@@ -30,22 +22,29 @@ class BinancePublicClient:
         Args:
             timeout: Request timeout in seconds.
         """
-        self.base_urls = tuple(base_url.rstrip("/") for base_url in self.BASE_URLS)
+        self.base_urls = [
+            "https://data-api.binance.vision",
+            "https://api1.binance.com",
+            "https://api2.binance.com",
+            "https://api3.binance.com",
+            "https://api.binance.com",
+        ]
         self.timeout = timeout
 
     def _get(
         self,
         path: str,
-        params: dict[str, Any] | None = None,
+        params: dict | None = None,
     ) -> Any:
         """GET a public Binance endpoint, trying all base URLs in order."""
         failures: list[str] = []
         last_error: Exception | None = None
 
         for base_url in self.base_urls:
+            url = f"{base_url}{path}"
             try:
                 response = requests.get(
-                    f"{base_url}{path}",
+                    url,
                     params=params,
                     timeout=self.timeout,
                 )
@@ -54,13 +53,13 @@ class BinancePublicClient:
                 requests.exceptions.Timeout,
                 requests.exceptions.ConnectionError,
                 requests.exceptions.HTTPError,
+                requests.exceptions.RequestException,
             ) as error:
                 print(f"Binance base URL failed: {base_url} - {error}")
                 failures.append(f"{base_url}: {error}")
                 last_error = error
                 continue
 
-            print(f"Using Binance base URL: {base_url}")
             return response.json()
 
         failed_base_urls = "; ".join(failures)
@@ -95,12 +94,10 @@ class BinancePublicClient:
             interval: Candle interval, such as ``15m``, ``1h``, or ``1d``.
             limit: Maximum number of candles to return.
         """
-        params = {
-            "symbol": symbol.upper(),
-            "interval": interval,
-            "limit": limit,
-        }
-        return self._get("/api/v3/klines", params=params)
+        return self._get(
+            "/api/v3/klines",
+            params={"symbol": symbol, "interval": interval, "limit": limit},
+        )
 
 
 def klines_to_dataframe(klines: list) -> pd.DataFrame:

@@ -2,6 +2,7 @@
 
 import argparse
 
+from app.alerts.alert_history import append_alert_history
 from app.alerts.alert_state import record_alert, should_send_alert
 from app.alerts.telegram import send_telegram_message
 from app.binance.client import BinancePublicClient
@@ -93,10 +94,12 @@ def main() -> None:
             print("Alert candidates found, but all were suppressed by cooldown.")
             return
 
-        message_sent = send_telegram_message(format_alert_message(candidates_to_send))
+        telegram_sent = send_telegram_message(format_alert_message(candidates_to_send))
 
-        if message_sent:
-            for candidate in candidates_to_send:
+        for candidate in candidates_to_send:
+            append_alert_history(candidate, telegram_sent=telegram_sent)
+
+            if telegram_sent:
                 record_alert(candidate["symbol"], _get_opportunity_score(candidate))
 
         return

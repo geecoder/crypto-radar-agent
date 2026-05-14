@@ -11,6 +11,13 @@ def test_main_sends_telegram_test_message_and_exits(monkeypatch, capsys) -> None
 
     monkeypatch.setattr(sys, "argv", ["python -m app.main", "--test-telegram"])
     monkeypatch.setattr(app_main, "send_telegram_message", messages.append)
+    monkeypatch.setattr(
+        app_main,
+        "append_alert_history",
+        lambda result, telegram_sent: (_ for _ in ()).throw(
+            AssertionError("Alert history should not be written in test mode.")
+        ),
+    )
 
     def fail_if_scanner_starts():
         raise AssertionError("Scanner should not start in Telegram test mode.")
@@ -26,6 +33,7 @@ def test_main_sends_telegram_test_message_and_exits(monkeypatch, capsys) -> None
 def test_main_sends_alert_message_when_candidates_exist(monkeypatch, capsys) -> None:
     sent_messages = []
     recorded_alerts = []
+    alert_history_records = []
     candidate = {
         "symbol": "BTCUSDT",
         "latest_close": 100.0,
@@ -68,6 +76,13 @@ def test_main_sends_alert_message_when_candidates_exist(monkeypatch, capsys) -> 
         "record_alert",
         lambda symbol, score: recorded_alerts.append((symbol, score)),
     )
+    monkeypatch.setattr(
+        app_main,
+        "append_alert_history",
+        lambda result, telegram_sent: alert_history_records.append(
+            (result["symbol"], telegram_sent)
+        ),
+    )
 
     app_main.main()
 
@@ -78,10 +93,69 @@ def test_main_sends_alert_message_when_candidates_exist(monkeypatch, capsys) -> 
     assert "Crypto Radar Alert Candidates" in sent_messages[0]
     assert "BTCUSDT" in sent_messages[0]
     assert recorded_alerts == [("BTCUSDT", 72)]
+    assert alert_history_records == [("BTCUSDT", True)]
+
+
+def test_main_logs_alert_history_when_telegram_send_fails(monkeypatch, capsys) -> None:
+    recorded_alerts = []
+    alert_history_records = []
+    candidate = {
+        "symbol": "BTCUSDT",
+        "latest_close": 100.0,
+        "opportunity": {
+            "opportunity_score": 72,
+            "classification": "Watchlist",
+            "target_bucket": "+20% momentum setup",
+            "risk_level": "Medium",
+            "summary": "Watchlist. Some signals are improving.",
+        },
+    }
+
+    fake_client = SimpleNamespace(
+        get_exchange_info=lambda: {"symbols": []},
+        get_24hr_tickers=lambda: [],
+    )
+
+    monkeypatch.setattr(sys, "argv", ["python -m app.main"])
+    monkeypatch.setattr(app_main, "BinancePublicClient", lambda: fake_client)
+    monkeypatch.setattr(app_main, "get_active_usdt_symbols", lambda exchange_info: ["BTCUSDT"])
+    monkeypatch.setattr(
+        app_main,
+        "select_priority_symbols",
+        lambda active_symbols, tickers_24hr, max_symbols=50: ["BTCUSDT"],
+    )
+    monkeypatch.setattr(
+        app_main,
+        "scan_symbols",
+        lambda client, symbols, interval="15m", limit=100, max_symbols=50: [candidate],
+    )
+    monkeypatch.setattr(app_main, "should_send_alert", lambda symbol, score: (True, "ok"))
+    monkeypatch.setattr(app_main, "send_telegram_message", lambda message: False)
+    monkeypatch.setattr(
+        app_main,
+        "record_alert",
+        lambda symbol, score: recorded_alerts.append((symbol, score)),
+    )
+    monkeypatch.setattr(
+        app_main,
+        "append_alert_history",
+        lambda result, telegram_sent: alert_history_records.append(
+            (result["symbol"], telegram_sent)
+        ),
+    )
+
+    app_main.main()
+
+    output = capsys.readouterr().out
+
+    assert "Alert candidates:" in output
+    assert recorded_alerts == []
+    assert alert_history_records == [("BTCUSDT", False)]
 
 
 def test_main_does_not_send_alert_message_when_no_candidates(monkeypatch, capsys) -> None:
     sent_messages = []
+    alert_history_records = []
     weak_setup = {
         "symbol": "ETHUSDT",
         "latest_close": 50.0,
@@ -113,12 +187,20 @@ def test_main_does_not_send_alert_message_when_no_candidates(monkeypatch, capsys
         lambda client, symbols, interval="15m", limit=100, max_symbols=50: [weak_setup],
     )
     monkeypatch.setattr(app_main, "send_telegram_message", sent_messages.append)
+    monkeypatch.setattr(
+        app_main,
+        "append_alert_history",
+        lambda result, telegram_sent: alert_history_records.append(
+            (result["symbol"], telegram_sent)
+        ),
+    )
 
     app_main.main()
 
     output = capsys.readouterr().out
 
     assert sent_messages == []
+    assert alert_history_records == []
     assert "No Telegram alert sent." in output
     assert "Best weak setups:" in output
 
@@ -126,6 +208,7 @@ def test_main_does_not_send_alert_message_when_no_candidates(monkeypatch, capsys
 def test_main_suppresses_alert_candidates_during_cooldown(monkeypatch, capsys) -> None:
     sent_messages = []
     recorded_alerts = []
+    alert_history_records = []
     candidate = {
         "symbol": "BTCUSDT",
         "latest_close": 100.0,
@@ -167,6 +250,13 @@ def test_main_suppresses_alert_candidates_during_cooldown(monkeypatch, capsys) -
         "record_alert",
         lambda symbol, score: recorded_alerts.append((symbol, score)),
     )
+    monkeypatch.setattr(
+        app_main,
+        "append_alert_history",
+        lambda result, telegram_sent: alert_history_records.append(
+            (result["symbol"], telegram_sent)
+        ),
+    )
 
     app_main.main()
 
@@ -174,5 +264,6 @@ def test_main_suppresses_alert_candidates_during_cooldown(monkeypatch, capsys) -
 
     assert sent_messages == []
     assert recorded_alerts == []
+    assert alert_history_records == []
     assert "BTCUSDT: Duplicate alert suppressed during cooldown." in output
     assert "Alert candidates found, but all were suppressed by cooldown." in output
