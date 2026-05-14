@@ -20,6 +20,7 @@ env/
 # Local alert state
 data/alert_state.json
 data/alert_history.json
+data/alert_outcomes.json
 
 # IDE/editor
 .idea/

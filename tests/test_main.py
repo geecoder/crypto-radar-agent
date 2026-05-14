@@ -30,6 +30,64 @@ def test_main_sends_telegram_test_message_and_exits(monkeypatch, capsys) -> None
     assert "Crypto Radar Agent started" in capsys.readouterr().out
 
 
+def test_main_checks_outcomes_and_exits(monkeypatch, capsys) -> None:
+    saved_outcomes = []
+    alert_history = [
+        {
+            "id": "BTCUSDT-2026-05-14T00:00:00+00:00",
+            "symbol": "BTCUSDT",
+            "latest_close": 100.0,
+        }
+    ]
+    outcomes = [
+        {
+            "symbol": "BTCUSDT",
+            "hit_5pct": True,
+            "hit_10pct": True,
+            "hit_20pct": False,
+            "hit_50pct": False,
+            "hit_100pct": False,
+        }
+    ]
+    fake_client = object()
+
+    monkeypatch.setattr(sys, "argv", ["python -m app.main", "--check-outcomes"])
+    monkeypatch.setattr(app_main, "load_alert_history", lambda: alert_history)
+    monkeypatch.setattr(app_main, "BinancePublicClient", lambda: fake_client)
+    monkeypatch.setattr(
+        app_main,
+        "check_alert_outcomes",
+        lambda history, client: outcomes,
+    )
+    monkeypatch.setattr(
+        app_main,
+        "save_alert_outcomes",
+        lambda records: saved_outcomes.extend(records),
+    )
+    monkeypatch.setattr(
+        app_main,
+        "scan_symbols",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("Scanner should not run in outcome-check mode.")
+        ),
+    )
+
+    app_main.main()
+
+    output = capsys.readouterr().out
+
+    assert saved_outcomes == outcomes
+    assert "Crypto Radar Agent started" in output
+    assert "Outcome check completed." in output
+    assert "Alerts checked: 1" in output
+    assert "Outcomes saved: 1" in output
+    assert "Hit +5%: 1" in output
+    assert "Hit +10%: 1" in output
+    assert "Hit +20%: 0" in output
+    assert "Hit +50%: 0" in output
+    assert "Hit +100%: 0" in output
+
+
 def test_main_sends_alert_message_when_candidates_exist(monkeypatch, capsys) -> None:
     sent_messages = []
     recorded_alerts = []

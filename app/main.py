@@ -2,9 +2,10 @@
 
 import argparse
 
-from app.alerts.alert_history import append_alert_history
+from app.alerts.alert_history import append_alert_history, load_alert_history
 from app.alerts.alert_state import record_alert, should_send_alert
 from app.alerts.telegram import send_telegram_message
+from app.analysis.outcome_tracker import check_alert_outcomes, save_alert_outcomes
 from app.binance.client import BinancePublicClient
 from app.binance.market_filter import select_priority_symbols
 from app.binance.symbols import get_active_usdt_symbols
@@ -26,6 +27,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Send a Telegram test message and exit.",
     )
+    parser.add_argument(
+        "--check-outcomes",
+        action="store_true",
+        help="Check saved alert history outcomes and exit.",
+    )
     return parser.parse_args()
 
 
@@ -37,6 +43,11 @@ def _get_opportunity_score(result: dict) -> int:
         return 0
 
 
+def _count_hit(outcomes: list[dict], threshold: int) -> int:
+    """Count outcomes that hit a target threshold."""
+    return sum(1 for outcome in outcomes if outcome.get(f"hit_{threshold}pct"))
+
+
 def main() -> None:
     """Start the MVP application."""
     print("Crypto Radar Agent started")
@@ -45,6 +56,22 @@ def main() -> None:
 
     if args.test_telegram:
         send_telegram_message(TELEGRAM_TEST_MESSAGE)
+        return
+
+    if args.check_outcomes:
+        alert_history = load_alert_history()
+        client = BinancePublicClient()
+        outcomes = check_alert_outcomes(alert_history, client)
+        save_alert_outcomes(outcomes)
+
+        print("Outcome check completed.")
+        print(f"Alerts checked: {len(alert_history)}")
+        print(f"Outcomes saved: {len(outcomes)}")
+        print(f"Hit +5%: {_count_hit(outcomes, 5)}")
+        print(f"Hit +10%: {_count_hit(outcomes, 10)}")
+        print(f"Hit +20%: {_count_hit(outcomes, 20)}")
+        print(f"Hit +50%: {_count_hit(outcomes, 50)}")
+        print(f"Hit +100%: {_count_hit(outcomes, 100)}")
         return
 
     client = BinancePublicClient()
