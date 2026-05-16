@@ -14,6 +14,10 @@ from app.analysis.performance_report import (
     build_performance_report,
     format_performance_report,
 )
+from app.analysis.signal_analysis import (
+    build_signal_analysis,
+    format_signal_analysis,
+)
 from app.binance.client import BinancePublicClient
 from app.binance.market_filter import select_priority_symbols
 from app.binance.symbols import get_active_usdt_symbols
@@ -49,6 +53,11 @@ def parse_args() -> argparse.Namespace:
         "--send-performance-report",
         action="store_true",
         help="Send a saved alert outcome performance report to Telegram and exit.",
+    )
+    parser.add_argument(
+        "--signal-analysis",
+        action="store_true",
+        help="Print a saved alert outcome signal performance analysis and exit.",
     )
     return parser.parse_args()
 
@@ -109,6 +118,12 @@ def main() -> None:
         else:
             print("Failed to send performance report to Telegram.")
 
+        return
+
+    if args.signal_analysis:
+        outcomes = load_alert_outcomes()
+        analysis = build_signal_analysis(outcomes)
+        print(format_signal_analysis(analysis))
         return
 
     client = BinancePublicClient()

@@ -190,6 +190,38 @@ def test_main_prints_failure_when_performance_report_telegram_send_fails(
     assert "Failed to send performance report to Telegram." in output
 
 
+def test_main_prints_signal_analysis_and_exits(monkeypatch, capsys) -> None:
+    outcomes = {
+        "BTCUSDT-1": {
+            "symbol": "BTCUSDT",
+            "checkpoints": {"+5%": {"status": "completed"}},
+            "opportunity_score": 80,
+            "max_upside_pct": 20,
+            "max_drawdown_pct": -5,
+            "move_stage_signal": {"stage": "Stage 3 - Confirmed early momentum"},
+        }
+    }
+
+    monkeypatch.setattr(sys, "argv", ["python -m app.main", "--signal-analysis"])
+    monkeypatch.setattr(app_main, "load_alert_outcomes", lambda: outcomes)
+    monkeypatch.setattr(
+        app_main,
+        "scan_symbols",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("Scanner should not run in signal-analysis mode.")
+        ),
+    )
+
+    app_main.main()
+
+    output = capsys.readouterr().out
+
+    assert "Crypto Radar Agent started" in output
+    assert "Crypto Radar Signal Analysis" in output
+    assert "Performance by Move Stage" in output
+    assert "Stage 3 - Confirmed early momentum" in output
+
+
 def test_main_sends_alert_message_when_candidates_exist(monkeypatch, capsys) -> None:
     sent_messages = []
     recorded_alerts = []
