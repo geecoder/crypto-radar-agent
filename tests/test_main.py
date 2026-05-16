@@ -88,6 +88,108 @@ def test_main_checks_outcomes_and_exits(monkeypatch, capsys) -> None:
     assert "Hit +100%: 0" in output
 
 
+def test_main_prints_performance_report_and_exits(monkeypatch, capsys) -> None:
+    outcomes = {
+        "BTCUSDT-1": {
+            "symbol": "BTCUSDT",
+            "checkpoints": {"+5%": {"status": "completed"}},
+            "hit_5_pct": True,
+        }
+    }
+
+    monkeypatch.setattr(sys, "argv", ["python -m app.main", "--performance-report"])
+    monkeypatch.setattr(app_main, "load_alert_outcomes", lambda: outcomes)
+    monkeypatch.setattr(
+        app_main,
+        "scan_symbols",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("Scanner should not run in performance-report mode.")
+        ),
+    )
+
+    app_main.main()
+
+    output = capsys.readouterr().out
+
+    assert "Crypto Radar Agent started" in output
+    assert "Crypto Radar Performance Report" in output
+    assert "Total outcomes: 1" in output
+    assert "Hit +5%: 1 (100%)" in output
+
+
+def test_main_sends_performance_report_to_telegram(monkeypatch, capsys) -> None:
+    sent_messages = []
+    outcomes = {
+        "BTCUSDT-1": {
+            "symbol": "BTCUSDT",
+            "checkpoints": {"+5%": {"status": "completed"}},
+            "hit_5_pct": True,
+        }
+    }
+
+    def fake_send_telegram_message(message: str) -> bool:
+        sent_messages.append(message)
+        return True
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["python -m app.main", "--send-performance-report"],
+    )
+    monkeypatch.setattr(app_main, "load_alert_outcomes", lambda: outcomes)
+    monkeypatch.setattr(app_main, "send_telegram_message", fake_send_telegram_message)
+    monkeypatch.setattr(
+        app_main,
+        "scan_symbols",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("Scanner should not run in send-performance-report mode.")
+        ),
+    )
+
+    app_main.main()
+
+    output = capsys.readouterr().out
+
+    assert "Crypto Radar Agent started" in output
+    assert "Performance report sent to Telegram." in output
+    assert len(sent_messages) == 1
+    assert "Crypto Radar Performance Report" in sent_messages[0]
+
+
+def test_main_prints_failure_when_performance_report_telegram_send_fails(
+    monkeypatch,
+    capsys,
+) -> None:
+    outcomes = {
+        "BTCUSDT-1": {
+            "symbol": "BTCUSDT",
+            "checkpoints": {"+5%": {"status": "completed"}},
+        }
+    }
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["python -m app.main", "--send-performance-report"],
+    )
+    monkeypatch.setattr(app_main, "load_alert_outcomes", lambda: outcomes)
+    monkeypatch.setattr(app_main, "send_telegram_message", lambda message: False)
+    monkeypatch.setattr(
+        app_main,
+        "scan_symbols",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("Scanner should not run in send-performance-report mode.")
+        ),
+    )
+
+    app_main.main()
+
+    output = capsys.readouterr().out
+
+    assert "Crypto Radar Agent started" in output
+    assert "Failed to send performance report to Telegram." in output
+
+
 def test_main_sends_alert_message_when_candidates_exist(monkeypatch, capsys) -> None:
     sent_messages = []
     recorded_alerts = []
@@ -120,7 +222,7 @@ def test_main_sends_alert_message_when_candidates_exist(monkeypatch, capsys) -> 
     monkeypatch.setattr(
         app_main,
         "scan_symbols",
-        lambda client, symbols, interval="15m", limit=100, max_symbols=50: [candidate],
+        lambda client, symbols, interval="15m", limit=100, max_symbols=50, tickers_24hr=None: [candidate],
     )
     monkeypatch.setattr(app_main, "should_send_alert", lambda symbol, score: (True, "ok"))
 
@@ -185,7 +287,7 @@ def test_main_logs_alert_history_when_telegram_send_fails(monkeypatch, capsys) -
     monkeypatch.setattr(
         app_main,
         "scan_symbols",
-        lambda client, symbols, interval="15m", limit=100, max_symbols=50: [candidate],
+        lambda client, symbols, interval="15m", limit=100, max_symbols=50, tickers_24hr=None: [candidate],
     )
     monkeypatch.setattr(app_main, "should_send_alert", lambda symbol, score: (True, "ok"))
     monkeypatch.setattr(app_main, "send_telegram_message", lambda message: False)
@@ -242,7 +344,7 @@ def test_main_does_not_send_alert_message_when_no_candidates(monkeypatch, capsys
     monkeypatch.setattr(
         app_main,
         "scan_symbols",
-        lambda client, symbols, interval="15m", limit=100, max_symbols=50: [weak_setup],
+        lambda client, symbols, interval="15m", limit=100, max_symbols=50, tickers_24hr=None: [weak_setup],
     )
     monkeypatch.setattr(app_main, "send_telegram_message", sent_messages.append)
     monkeypatch.setattr(
@@ -295,7 +397,7 @@ def test_main_suppresses_alert_candidates_during_cooldown(monkeypatch, capsys) -
     monkeypatch.setattr(
         app_main,
         "scan_symbols",
-        lambda client, symbols, interval="15m", limit=100, max_symbols=50: [candidate],
+        lambda client, symbols, interval="15m", limit=100, max_symbols=50, tickers_24hr=None: [candidate],
     )
     monkeypatch.setattr(
         app_main,

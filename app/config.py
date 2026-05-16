@@ -20,6 +20,8 @@ class Settings:
     binance_base_url: str = os.getenv("BINANCE_BASE_URL", "https://api.binance.com")
     default_quote_asset: str = os.getenv("DEFAULT_QUOTE_ASSET", "USDT")
     log_level: str = os.getenv("LOG_LEVEL", "INFO")
+    supabase_database_url: str = os.getenv("SUPABASE_DATABASE_URL", "").strip()
+    persistence_backend: str = os.getenv("PERSISTENCE_BACKEND", "json").strip() or "json"
     telegram_bot_token: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
     telegram_chat_id: str = os.getenv("TELEGRAM_CHAT_ID", "")
     telegram_alerts_enabled: bool = (
@@ -28,3 +30,10 @@ class Settings:
 
 
 settings = Settings()
+
+SUPABASE_DATABASE_URL = settings.supabase_database_url
+PERSISTENCE_BACKEND = settings.persistence_backend
+USE_SUPABASE = (
+    PERSISTENCE_BACKEND.lower() == "supabase"
+    and SUPABASE_DATABASE_URL != ""
+)

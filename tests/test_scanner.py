@@ -50,7 +50,11 @@ class FailingClient:
 
 
 def test_scan_symbol_returns_signals_and_opportunity_score() -> None:
-    result = scan_symbol(FakeClient(), "BTCUSDT")
+    result = scan_symbol(
+        FakeClient(),
+        "BTCUSDT",
+        ticker_24hr={"symbol": "BTCUSDT", "quoteVolume": "150000000", "count": "300000"},
+    )
 
     assert result["symbol"] == "BTCUSDT"
     assert result["latest_close"] == 116.0
@@ -59,7 +63,11 @@ def test_scan_symbol_returns_signals_and_opportunity_score() -> None:
     assert result["breakout_signal"]["score"] == 100
     assert result["trend_signal"]["score"] == 100
     assert result["volatility_signal"]["score"] == 80
-    assert result["opportunity"]["opportunity_score"] == 97
+    assert result["move_stage_signal"]["score"] == 45
+    assert result["exhaustion_signal"]["risk_score"] == 20
+    assert result["liquidity_signal"]["score"] == 80
+    assert result["continuation_target"]["name"] == "continuation_target"
+    assert result["opportunity"]["opportunity_score"] == 85
 
 
 def test_scan_symbol_returns_error_when_symbol_fails() -> None:
@@ -70,7 +78,16 @@ def test_scan_symbol_returns_error_when_symbol_fails() -> None:
 
 
 def test_scan_symbols_limits_skips_errors_and_sorts_results(monkeypatch) -> None:
-    def fake_scan_symbol(client, symbol: str, interval: str = "15m", limit: int = 100):
+    seen_tickers = {}
+
+    def fake_scan_symbol(
+        client,
+        symbol: str,
+        interval: str = "15m",
+        limit: int = 100,
+        ticker_24hr: dict | None = None,
+    ):
+        seen_tickers[symbol] = ticker_24hr
         results = {
             "AAAUSDT": {
                 "symbol": "AAAUSDT",
@@ -93,9 +110,16 @@ def test_scan_symbols_limits_skips_errors_and_sorts_results(monkeypatch) -> None
         client=object(),
         symbols=["AAAUSDT", "BBBUSDT", "CCCUSDT", "DDDUSDT"],
         max_symbols=3,
+        tickers_24hr=[
+            {"symbol": "AAAUSDT", "quoteVolume": "1", "count": "1"},
+            {"symbol": "BBBUSDT", "quoteVolume": "2", "count": "2"},
+        ],
     )
 
     assert [result["symbol"] for result in results] == ["BBBUSDT", "AAAUSDT"]
+    assert seen_tickers["AAAUSDT"]["quoteVolume"] == "1"
+    assert seen_tickers["BBBUSDT"]["quoteVolume"] == "2"
+    assert seen_tickers["CCCUSDT"] is None
 
 
 def test_get_alert_candidates_filters_errors_and_minimum_score() -> None:

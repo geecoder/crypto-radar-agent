@@ -5,6 +5,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from app.config import USE_SUPABASE
+from app.storage import supabase_store
+
 OUTCOME_FILE = "data/alert_outcomes.json"
 HIT_THRESHOLDS = (5, 10, 20, 50, 100)
 
@@ -16,11 +19,42 @@ def ensure_data_dir() -> None:
 
 def save_alert_outcomes(outcomes: list[dict]) -> None:
     """Save alert outcome records to disk."""
+    if USE_SUPABASE:
+        for outcome in outcomes:
+            supabase_store.upsert_alert_outcome(outcome)
+        return
+
     ensure_data_dir()
     outcome_path = Path(OUTCOME_FILE)
 
     with outcome_path.open("w", encoding="utf-8") as file:
         json.dump(outcomes, file, indent=2)
+
+
+def load_alert_outcomes() -> dict:
+    """Load saved alert outcome records by alert ID."""
+    if USE_SUPABASE:
+        return supabase_store.load_alert_outcomes()
+
+    outcome_path = Path(OUTCOME_FILE)
+
+    if not outcome_path.exists():
+        return {}
+
+    try:
+        with outcome_path.open("r", encoding="utf-8") as file:
+            outcomes = json.load(file)
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+    if not isinstance(outcomes, list):
+        return {}
+
+    return {
+        outcome["alert_id"]: outcome
+        for outcome in outcomes
+        if isinstance(outcome, dict) and outcome.get("alert_id")
+    }
 
 
 def _parse_alerted_at(alerted_at: str | None) -> datetime | None:

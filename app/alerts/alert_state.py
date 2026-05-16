@@ -4,6 +4,9 @@ import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from app.config import USE_SUPABASE
+from app.storage import supabase_store
+
 ALERT_STATE_FILE = "data/alert_state.json"
 
 
@@ -52,8 +55,11 @@ def should_send_alert(
     score_improvement_threshold: int = 10,
 ) -> tuple[bool, str]:
     """Return whether an alert should be sent for a symbol."""
-    state = load_alert_state()
-    previous_alert = state.get(symbol)
+    if USE_SUPABASE:
+        previous_alert = supabase_store.get_alert_state(symbol)
+    else:
+        state = load_alert_state()
+        previous_alert = state.get(symbol)
 
     if not previous_alert:
         return True, "No previous alert for symbol."
@@ -77,9 +83,15 @@ def should_send_alert(
 
 def record_alert(symbol: str, score: int) -> None:
     """Record that an alert was sent for a symbol."""
+    last_alerted_at = datetime.now(timezone.utc).isoformat()
+
+    if USE_SUPABASE:
+        supabase_store.upsert_alert_state(symbol, score, last_alerted_at)
+        return
+
     state = load_alert_state()
     state[symbol] = {
-        "last_alerted_at": datetime.now(timezone.utc).isoformat(),
+        "last_alerted_at": last_alerted_at,
         "last_score": score,
     }
     save_alert_state(state)

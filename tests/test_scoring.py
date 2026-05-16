@@ -10,7 +10,7 @@ def test_calculate_opportunity_score_weights_indicator_scores() -> None:
         {"score": 0},
     )
 
-    assert result["opportunity_score"] == 25
+    assert result["opportunity_score"] == 20
     assert result["classification"] == "Ignore"
     assert result["target_bucket"] == "No clear upside setup"
     assert result["risk_level"] == "Low"
@@ -20,6 +20,9 @@ def test_calculate_opportunity_score_weights_indicator_scores() -> None:
         "breakout": 0,
         "trend": 0,
         "volatility": 0,
+        "move_stage": 0,
+        "liquidity": 0,
+        "exhaustion_risk": 0,
     }
 
 
@@ -30,9 +33,12 @@ def test_calculate_opportunity_score_returns_plus_50_bucket_for_strong_setup() -
         {"score": 80},
         {"score": 100},
         {"score": 100},
+        {"score": 100},
+        {"score": 100},
+        {"risk_score": 0},
     )
 
-    assert result["opportunity_score"] == 91
+    assert result["opportunity_score"] == 93
     assert result["classification"] == "Strong watch"
     assert result["target_bucket"] == "+50% speculative setup"
     assert result["risk_level"] == "High"
@@ -42,7 +48,7 @@ def test_calculate_opportunity_score_returns_plus_50_bucket_for_strong_setup() -
 def test_calculate_opportunity_score_treats_missing_scores_as_zero() -> None:
     result = calculate_opportunity_score({}, {"score": 70}, {})
 
-    assert result["opportunity_score"] == 18
+    assert result["opportunity_score"] == 14
     assert result["classification"] == "Ignore"
     assert result["component_scores"] == {
         "volume": 0,
@@ -50,4 +56,23 @@ def test_calculate_opportunity_score_treats_missing_scores_as_zero() -> None:
         "breakout": 0,
         "trend": 0,
         "volatility": 0,
+        "move_stage": 0,
+        "liquidity": 0,
+        "exhaustion_risk": 0,
     }
+
+
+def test_calculate_opportunity_score_subtracts_exhaustion_penalty() -> None:
+    result = calculate_opportunity_score(
+        {"score": 100},
+        {"score": 100},
+        {"score": 100},
+        {"score": 100},
+        {"score": 100},
+        {"score": 100},
+        {"score": 100},
+        {"risk_score": 100},
+    )
+
+    assert result["opportunity_score"] == 80
+    assert result["component_scores"]["exhaustion_risk"] == 100

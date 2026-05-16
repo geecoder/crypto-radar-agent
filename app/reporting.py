@@ -21,6 +21,14 @@ def _format_signal(name: str, signal: dict | None) -> str:
     return f"{name}: score {score} - {reason}"
 
 
+def _format_pct(value) -> str:
+    """Format a percentage value for reports."""
+    try:
+        return f"{float(value):.2f}%"
+    except (TypeError, ValueError):
+        return "Not available"
+
+
 def _get_interpretation(opportunity_score: int) -> str:
     """Return a short interpretation for an opportunity score."""
     if opportunity_score >= 70:
@@ -70,6 +78,10 @@ def format_top_opportunity_detail(result: dict) -> str:
     """Return a detailed plain-English breakdown for one scan result."""
     opportunity = result.get("opportunity", {})
     opportunity_score = _safe_opportunity_score(opportunity)
+    move_stage = result.get("move_stage_signal", {})
+    continuation_target = result.get("continuation_target", {})
+    exhaustion_signal = result.get("exhaustion_signal", {})
+    liquidity_signal = result.get("liquidity_signal", {})
 
     lines = [
         "Top opportunity detail:",
@@ -80,6 +92,17 @@ def format_top_opportunity_detail(result: dict) -> str:
         f"Target bucket: {opportunity.get('target_bucket', 'Not available')}",
         f"Risk level: {opportunity.get('risk_level', 'Not available')}",
         f"Summary: {opportunity.get('summary', 'Not available')}",
+        f"Move Stage: {move_stage.get('stage', 'Not available')}",
+        (
+            "Move From Recent Low %: "
+            f"{_format_pct(move_stage.get('move_from_recent_low_pct'))}"
+        ),
+        (
+            "Continuation Target: "
+            f"{continuation_target.get('target_bucket', 'Not available')}"
+        ),
+        f"Exhaustion Risk: {exhaustion_signal.get('risk_level', 'Not available')}",
+        f"Liquidity Quality: {liquidity_signal.get('label', 'Not available')}",
         "",
         "Signals:",
         _format_signal("Volume signal", result.get("volume_signal")),
@@ -87,6 +110,14 @@ def format_top_opportunity_detail(result: dict) -> str:
         _format_signal("Breakout signal", result.get("breakout_signal")),
         _format_signal("Trend signal", result.get("trend_signal")),
         _format_signal("Volatility signal", result.get("volatility_signal")),
+        _format_signal("Move stage signal", result.get("move_stage_signal")),
+        _format_signal("Liquidity signal", result.get("liquidity_signal")),
+        (
+            "Exhaustion risk: "
+            f"{exhaustion_signal.get('risk_level', 'Not available')} "
+            f"(score {exhaustion_signal.get('risk_score', 'Not available')}) - "
+            f"{exhaustion_signal.get('reason', 'Not available')}"
+        ),
         "",
         "Interpretation:",
         _get_interpretation(opportunity_score),
@@ -101,6 +132,10 @@ def format_alert_message(alert_candidates: list[dict]) -> str:
 
     for candidate in alert_candidates:
         opportunity = candidate.get("opportunity", {})
+        move_stage = candidate.get("move_stage_signal", {})
+        continuation_target = candidate.get("continuation_target", {})
+        exhaustion_signal = candidate.get("exhaustion_signal", {})
+        liquidity_signal = candidate.get("liquidity_signal", {})
         lines.extend(
             [
                 "",
@@ -118,6 +153,30 @@ def format_alert_message(alert_candidates: list[dict]) -> str:
                     f"{escape(str(opportunity.get('target_bucket', 'Not available')))}"
                 ),
                 f"Risk level: {escape(str(opportunity.get('risk_level', 'Not available')))}",
+                (
+                    "Move Stage: "
+                    f"{escape(str(move_stage.get('stage', 'Not available')))}"
+                ),
+                (
+                    "Move From Recent Low %: "
+                    f"{escape(_format_pct(move_stage.get('move_from_recent_low_pct')))}"
+                ),
+                (
+                    "Continuation Target: "
+                    f"{escape(str(continuation_target.get('target_bucket', 'Not available')))}"
+                ),
+                (
+                    "Confidence: "
+                    f"{escape(str(continuation_target.get('confidence', 'Not available')))}"
+                ),
+                (
+                    "Exhaustion Risk: "
+                    f"{escape(str(exhaustion_signal.get('risk_level', 'Not available')))}"
+                ),
+                (
+                    "Liquidity Quality: "
+                    f"{escape(str(liquidity_signal.get('label', 'Not available')))}"
+                ),
                 f"Latest close: {escape(str(candidate.get('latest_close', 'Not available')))}",
                 f"Summary: {escape(str(opportunity.get('summary', 'Not available')))}",
             ]

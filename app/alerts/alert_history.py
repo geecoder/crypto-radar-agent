@@ -4,6 +4,9 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
+from app.config import USE_SUPABASE
+from app.storage import supabase_store
+
 ALERT_HISTORY_FILE = "data/alert_history.json"
 
 
@@ -12,8 +15,11 @@ def ensure_data_dir() -> None:
     Path(ALERT_HISTORY_FILE).parent.mkdir(parents=True, exist_ok=True)
 
 
-def load_alert_history() -> list[dict]:
+def load_alert_history(limit: int | None = None) -> list[dict]:
     """Load alert history from disk."""
+    if USE_SUPABASE:
+        return supabase_store.load_alert_history(limit=limit)
+
     history_path = Path(ALERT_HISTORY_FILE)
 
     if not history_path.exists():
@@ -27,6 +33,9 @@ def load_alert_history() -> list[dict]:
 
     if not isinstance(history, list):
         return []
+
+    if limit is not None:
+        return history[:max(0, int(limit))]
 
     return history
 
@@ -68,8 +77,13 @@ def build_alert_history_record(result: dict, telegram_sent: bool) -> dict:
 
 def append_alert_history(result: dict, telegram_sent: bool) -> dict:
     """Append one alert candidate to local history and return the new record."""
-    history = load_alert_history()
     record = build_alert_history_record(result, telegram_sent)
+
+    if USE_SUPABASE:
+        supabase_store.insert_alert_history(record)
+        return record
+
+    history = load_alert_history()
     history.append(record)
     save_alert_history(history)
     return record

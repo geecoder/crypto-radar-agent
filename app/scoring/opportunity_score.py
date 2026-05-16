@@ -14,6 +14,19 @@ def _safe_score(signal: dict | None) -> int:
     return max(0, min(score, 100))
 
 
+def _safe_risk_score(signal: dict | None) -> int:
+    """Read an exhaustion risk score safely and keep it between 0 and 100."""
+    if signal is None:
+        return 0
+
+    try:
+        score = int(signal.get("risk_score", 0))
+    except (TypeError, ValueError):
+        score = 0
+
+    return max(0, min(score, 100))
+
+
 def _classify_score(score: int) -> str:
     """Return the plain-English classification for an opportunity score."""
     if score >= 80:
@@ -51,14 +64,31 @@ def _get_risk_level(score: int, target_bucket: str) -> str:
 
 def _build_summary(classification: str, component_scores: dict[str, int]) -> str:
     """Build a short plain-English summary for the score result."""
-    aligned = all(score >= 60 for score in component_scores.values())
-    strong_count = sum(score >= 60 for score in component_scores.values())
+    signal_scores = {
+        name: score
+        for name, score in component_scores.items()
+        if name != "exhaustion_risk"
+    }
+    aligned = all(score >= 60 for score in signal_scores.values())
+    strong_count = sum(score >= 60 for score in signal_scores.values())
+    exhaustion_risk = component_scores.get("exhaustion_risk", 0)
 
-    if aligned:
-        return f"{classification}. Volume, momentum, breakout, trend, and volatility signals are aligned."
+    if aligned and exhaustion_risk < 60:
+        return (
+            f"{classification}. Volume, momentum, breakout, trend, volatility, "
+            "move stage, and liquidity signals are aligned."
+        )
+
+    if exhaustion_risk >= 60:
+        return (
+            f"{classification}. Signals are improving, but exhaustion risk is high."
+        )
 
     if strong_count == 0:
-        return f"{classification}. Signals are weak across volume, momentum, breakout, trend, and volatility."
+        return (
+            f"{classification}. Signals are weak across volume, momentum, "
+            "breakout, trend, volatility, move stage, and liquidity."
+        )
 
     return f"{classification}. Some signals are improving, but the full signal set is not aligned."
 
@@ -69,6 +99,9 @@ def calculate_opportunity_score(
     breakout_signal: dict,
     trend_signal: dict | None = None,
     volatility_signal: dict | None = None,
+    move_stage_signal: dict | None = None,
+    liquidity_signal: dict | None = None,
+    exhaustion_signal: dict | None = None,
 ) -> dict:
     """Calculate a weighted opportunity score from basic signal indicators."""
     volume_score = _safe_score(volume_signal)
@@ -76,14 +109,21 @@ def calculate_opportunity_score(
     breakout_score = _safe_score(breakout_signal)
     trend_score = _safe_score(trend_signal)
     volatility_score = _safe_score(volatility_signal)
+    move_stage_score = _safe_score(move_stage_signal)
+    liquidity_score = _safe_score(liquidity_signal)
+    exhaustion_risk_score = _safe_risk_score(exhaustion_signal)
 
-    opportunity_score = round(
-        (volume_score * 0.25)
-        + (momentum_score * 0.25)
-        + (breakout_score * 0.20)
+    raw_score = (
+        (volume_score * 0.20)
+        + (momentum_score * 0.20)
+        + (breakout_score * 0.15)
         + (trend_score * 0.15)
-        + (volatility_score * 0.15)
+        + (volatility_score * 0.10)
+        + (move_stage_score * 0.15)
+        + (liquidity_score * 0.05)
+        - (exhaustion_risk_score * 0.20)
     )
+    opportunity_score = max(0, min(round(raw_score), 100))
     classification = _classify_score(opportunity_score)
     target_bucket = _get_target_bucket(
         opportunity_score,
@@ -97,6 +137,9 @@ def calculate_opportunity_score(
         "breakout": breakout_score,
         "trend": trend_score,
         "volatility": volatility_score,
+        "move_stage": move_stage_score,
+        "liquidity": liquidity_score,
+        "exhaustion_risk": exhaustion_risk_score,
     }
 
     return {

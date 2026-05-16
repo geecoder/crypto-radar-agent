@@ -58,6 +58,7 @@ def test_build_alert_history_record_includes_scan_fields() -> None:
 
 
 def test_append_alert_history_loads_appends_and_saves(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(alert_history, "USE_SUPABASE", False)
     history_file = tmp_path / "data" / "alert_history.json"
     monkeypatch.setattr(alert_history, "ALERT_HISTORY_FILE", str(history_file))
 
@@ -78,6 +79,7 @@ def test_load_alert_history_returns_empty_list_for_missing_or_invalid_file(
     monkeypatch,
     tmp_path,
 ) -> None:
+    monkeypatch.setattr(alert_history, "USE_SUPABASE", False)
     history_file = tmp_path / "data" / "alert_history.json"
     monkeypatch.setattr(alert_history, "ALERT_HISTORY_FILE", str(history_file))
 
@@ -87,3 +89,35 @@ def test_load_alert_history_returns_empty_list_for_missing_or_invalid_file(
     history_file.write_text("{not-json", encoding="utf-8")
 
     assert alert_history.load_alert_history() == []
+
+
+def test_load_alert_history_uses_supabase_when_enabled(monkeypatch) -> None:
+    supabase_history = [{"id": "BTCUSDT-1", "symbol": "BTCUSDT"}]
+
+    monkeypatch.setattr(alert_history, "USE_SUPABASE", True)
+    monkeypatch.setattr(
+        alert_history.supabase_store,
+        "load_alert_history",
+        lambda limit=None: supabase_history,
+    )
+
+    assert alert_history.load_alert_history(limit=10) == supabase_history
+
+
+def test_append_alert_history_inserts_supabase_when_enabled(monkeypatch) -> None:
+    inserted_records = []
+
+    monkeypatch.setattr(alert_history, "USE_SUPABASE", True)
+    monkeypatch.setattr(
+        alert_history.supabase_store,
+        "insert_alert_history",
+        inserted_records.append,
+    )
+
+    record = alert_history.append_alert_history(
+        _sample_result(),
+        telegram_sent=True,
+    )
+
+    assert inserted_records == [record]
+    assert record["symbol"] == "BTCUSDT"

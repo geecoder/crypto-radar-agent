@@ -16,6 +16,27 @@ def _sample_result() -> dict:
         "breakout_signal": {"score": 40, "reason": "Breakout is early."},
         "trend_signal": {"score": 100, "reason": "Trend is aligned."},
         "volatility_signal": {"score": 20, "reason": "Volatility is modest."},
+        "move_stage_signal": {
+            "score": 90,
+            "stage": "Stage 3 - Confirmed early momentum",
+            "move_from_recent_low_pct": 8.5,
+            "reason": "Price is 8.50% above the recent low.",
+        },
+        "exhaustion_signal": {
+            "risk_score": 20,
+            "risk_level": "Low",
+            "reason": "Low exhaustion risk.",
+        },
+        "liquidity_signal": {
+            "score": 80,
+            "label": "Strong",
+            "reason": "Strong liquidity.",
+        },
+        "continuation_target": {
+            "target_bucket": "+50% high-volatility watch",
+            "confidence": "Medium",
+            "reason": "Strong continuation profile.",
+        },
         "opportunity": {
             "opportunity_score": 72,
             "classification": "Watchlist",
@@ -50,11 +71,19 @@ def test_format_top_opportunity_detail_includes_all_signal_reasons() -> None:
     assert "Target bucket: +20% momentum setup" in detail
     assert "Risk level: Medium" in detail
     assert "Summary: Watchlist. Some signals are improving." in detail
+    assert "Move Stage: Stage 3 - Confirmed early momentum" in detail
+    assert "Move From Recent Low %: 8.50%" in detail
+    assert "Continuation Target: +50% high-volatility watch" in detail
+    assert "Exhaustion Risk: Low" in detail
+    assert "Liquidity Quality: Strong" in detail
     assert "Volume signal: score 80 - Volume is elevated." in detail
     assert "Momentum signal: score 60 - Momentum is improving." in detail
     assert "Breakout signal: score 40 - Breakout is early." in detail
     assert "Trend signal: score 100 - Trend is aligned." in detail
     assert "Volatility signal: score 20 - Volatility is modest." in detail
+    assert "Move stage signal: score 90 - Price is 8.50% above the recent low." in detail
+    assert "Liquidity signal: score 80 - Strong liquidity." in detail
+    assert "Exhaustion risk: Low (score 20) - Low exhaustion risk." in detail
     assert "This is an alert candidate." in detail
 
 
@@ -78,6 +107,12 @@ def test_format_alert_message_returns_telegram_html() -> None:
     assert "Classification: Watchlist" in message
     assert "Target bucket: +20% momentum setup" in message
     assert "Risk level: Medium" in message
+    assert "Move Stage: Stage 3 - Confirmed early momentum" in message
+    assert "Move From Recent Low %: 8.50%" in message
+    assert "Continuation Target: +50% high-volatility watch" in message
+    assert "Confidence: Medium" in message
+    assert "Exhaustion Risk: Low" in message
+    assert "Liquidity Quality: Strong" in message
     assert "Latest close: 100.5" in message
     assert "Summary: Watchlist. Some signals are improving." in message
     assert "Not financial advice. Use this as a monitoring signal only." in message

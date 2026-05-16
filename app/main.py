@@ -132,6 +132,7 @@ def main() -> None:
         interval="15m",
         limit=100,
         max_symbols=50,
+        tickers_24hr=tickers_24hr,
     )
 
     alert_candidates = get_alert_candidates(opportunities, minimum_score=60)

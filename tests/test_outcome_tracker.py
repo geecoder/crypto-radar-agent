@@ -49,6 +49,7 @@ def test_check_alert_outcomes_marks_hit_thresholds() -> None:
 
 
 def test_save_alert_outcomes_writes_json(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(outcome_tracker, "USE_SUPABASE", False)
     outcome_file = tmp_path / "data" / "alert_outcomes.json"
     monkeypatch.setattr(outcome_tracker, "OUTCOME_FILE", str(outcome_file))
     outcomes = [{"symbol": "BTCUSDT", "hit_5pct": True}]
@@ -63,6 +64,58 @@ def test_save_alert_outcomes_writes_json(monkeypatch, tmp_path) -> None:
         "  }\n"
         "]"
     )
+
+
+def test_load_alert_outcomes_reads_json(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(outcome_tracker, "USE_SUPABASE", False)
+    outcome_file = tmp_path / "data" / "alert_outcomes.json"
+    monkeypatch.setattr(outcome_tracker, "OUTCOME_FILE", str(outcome_file))
+    outcome_file.parent.mkdir(parents=True)
+    outcome_file.write_text(
+        (
+            "[\n"
+            "  {\n"
+            '    "alert_id": "BTCUSDT-1",\n'
+            '    "symbol": "BTCUSDT"\n'
+            "  }\n"
+            "]"
+        ),
+        encoding="utf-8",
+    )
+
+    assert outcome_tracker.load_alert_outcomes() == {
+        "BTCUSDT-1": {"alert_id": "BTCUSDT-1", "symbol": "BTCUSDT"}
+    }
+
+
+def test_save_alert_outcomes_upserts_supabase_when_enabled(monkeypatch) -> None:
+    upserted_outcomes = []
+
+    monkeypatch.setattr(outcome_tracker, "USE_SUPABASE", True)
+    monkeypatch.setattr(
+        outcome_tracker.supabase_store,
+        "upsert_alert_outcome",
+        upserted_outcomes.append,
+    )
+
+    outcomes = [{"alert_id": "BTCUSDT-1", "symbol": "BTCUSDT"}]
+
+    outcome_tracker.save_alert_outcomes(outcomes)
+
+    assert upserted_outcomes == outcomes
+
+
+def test_load_alert_outcomes_uses_supabase_when_enabled(monkeypatch) -> None:
+    supabase_outcomes = {"BTCUSDT-1": {"symbol": "BTCUSDT"}}
+
+    monkeypatch.setattr(outcome_tracker, "USE_SUPABASE", True)
+    monkeypatch.setattr(
+        outcome_tracker.supabase_store,
+        "load_alert_outcomes",
+        lambda: supabase_outcomes,
+    )
+
+    assert outcome_tracker.load_alert_outcomes() == supabase_outcomes
 
 
 def test_check_alert_outcomes_records_errors() -> None:
