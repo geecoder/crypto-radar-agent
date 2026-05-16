@@ -12,6 +12,8 @@ except ModuleNotFoundError:
 
 load_dotenv()
 
+DEBUG = os.getenv("DEBUG", "false").strip().lower() == "true"
+
 
 @dataclass(frozen=True)
 class Settings:

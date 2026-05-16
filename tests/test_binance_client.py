@@ -41,6 +41,7 @@ def test_binance_public_client_retries_451_with_next_base_url(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     calls: list[str] = []
+    monkeypatch.setattr("app.binance.client.DEBUG", False)
 
     def fake_get(
         url: str,
@@ -66,6 +67,37 @@ def test_binance_public_client_retries_451_with_next_base_url(
     ]
 
     output = capsys.readouterr().out
+    assert "Binance base URL failed: https://data-api.binance.vision" in output
+    assert "451 Client Error" not in output
+
+
+def test_binance_public_client_prints_error_detail_when_debug_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    calls: list[str] = []
+    monkeypatch.setattr("app.binance.client.DEBUG", True)
+
+    def fake_get(
+        url: str,
+        params: dict[str, object] | None = None,
+        timeout: int | None = None,
+    ) -> FakeResponse:
+        calls.append(url)
+        if len(calls) == 1:
+            return FakeResponse(
+                {},
+                requests.exceptions.HTTPError("451 Client Error"),
+            )
+        return FakeResponse({"symbols": []})
+
+    monkeypatch.setattr(requests, "get", fake_get)
+
+    result = BinancePublicClient().get_exchange_info()
+
+    assert result == {"symbols": []}
+
+    output = capsys.readouterr().out
     assert (
         "Binance base URL failed: https://data-api.binance.vision - "
         "451 Client Error"
@@ -75,6 +107,8 @@ def test_binance_public_client_retries_451_with_next_base_url(
 def test_binance_public_client_raises_runtime_error_after_all_base_urls_fail(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr("app.binance.client.DEBUG", False)
+
     def fake_get(
         url: str,
         params: dict[str, object] | None = None,

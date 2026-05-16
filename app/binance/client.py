@@ -9,6 +9,8 @@ from typing import Any
 import pandas as pd
 import requests
 
+from app.config import DEBUG
+
 
 class BinancePublicClient:
     """Small client for Binance public Spot REST market-data endpoints."""
@@ -55,8 +57,12 @@ class BinancePublicClient:
                 requests.exceptions.HTTPError,
                 requests.exceptions.RequestException,
             ) as error:
-                print(f"Binance base URL failed: {base_url} - {error}")
-                failures.append(f"{base_url}: {error}")
+                if DEBUG:
+                    print(f"Binance base URL failed: {base_url} - {error}")
+                    failures.append(f"{base_url}: {error}")
+                else:
+                    print(f"Binance base URL failed: {base_url}")
+                    failures.append(base_url)
                 last_error = error
                 continue
 
