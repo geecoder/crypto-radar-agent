@@ -5,7 +5,15 @@ import argparse
 from app.alerts.alert_history import append_alert_history, load_alert_history
 from app.alerts.alert_state import record_alert, should_send_alert
 from app.alerts.telegram import send_telegram_message
-from app.analysis.outcome_tracker import check_alert_outcomes, save_alert_outcomes
+from app.analysis.outcome_tracker import (
+    check_alert_outcomes,
+    load_alert_outcomes,
+    save_alert_outcomes,
+)
+from app.analysis.performance_report import (
+    build_performance_report,
+    format_performance_report,
+)
 from app.binance.client import BinancePublicClient
 from app.binance.market_filter import select_priority_symbols
 from app.binance.symbols import get_active_usdt_symbols
@@ -31,6 +39,16 @@ def parse_args() -> argparse.Namespace:
         "--check-outcomes",
         action="store_true",
         help="Check saved alert history outcomes and exit.",
+    )
+    parser.add_argument(
+        "--performance-report",
+        action="store_true",
+        help="Print a saved alert outcome performance report and exit.",
+    )
+    parser.add_argument(
+        "--send-performance-report",
+        action="store_true",
+        help="Send a saved alert outcome performance report to Telegram and exit.",
     )
     return parser.parse_args()
 
@@ -72,6 +90,25 @@ def main() -> None:
         print(f"Hit +20%: {_count_hit(outcomes, 20)}")
         print(f"Hit +50%: {_count_hit(outcomes, 50)}")
         print(f"Hit +100%: {_count_hit(outcomes, 100)}")
+        return
+
+    if args.performance_report:
+        outcomes = load_alert_outcomes()
+        report = build_performance_report(outcomes)
+        print(format_performance_report(report))
+        return
+
+    if args.send_performance_report:
+        outcomes = load_alert_outcomes()
+        report = build_performance_report(outcomes)
+        message = format_performance_report(report)
+        message_sent = send_telegram_message(message)
+
+        if message_sent:
+            print("Performance report sent to Telegram.")
+        else:
+            print("Failed to send performance report to Telegram.")
+
         return
 
     client = BinancePublicClient()
