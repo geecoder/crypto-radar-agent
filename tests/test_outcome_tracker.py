@@ -48,6 +48,13 @@ def test_check_alert_outcomes_marks_hit_thresholds() -> None:
     ]
 
 
+def test_load_alert_outcomes_can_be_imported() -> None:
+    from app.analysis.outcome_tracker import load_alert_outcomes, save_alert_outcomes
+
+    assert callable(load_alert_outcomes)
+    assert callable(save_alert_outcomes)
+
+
 def test_save_alert_outcomes_writes_json(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(outcome_tracker, "USE_SUPABASE", False)
     outcome_file = tmp_path / "data" / "alert_outcomes.json"
@@ -59,6 +66,31 @@ def test_save_alert_outcomes_writes_json(monkeypatch, tmp_path) -> None:
     assert outcome_file.read_text(encoding="utf-8") == (
         "[\n"
         "  {\n"
+        '    "symbol": "BTCUSDT",\n'
+        '    "hit_5pct": true\n'
+        "  }\n"
+        "]"
+    )
+
+
+def test_save_alert_outcomes_writes_json_from_mapping(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(outcome_tracker, "USE_SUPABASE", False)
+    outcome_file = tmp_path / "data" / "alert_outcomes.json"
+    monkeypatch.setattr(outcome_tracker, "OUTCOME_FILE", str(outcome_file))
+    outcomes = {
+        "BTCUSDT-1": {
+            "alert_id": "BTCUSDT-1",
+            "symbol": "BTCUSDT",
+            "hit_5pct": True,
+        }
+    }
+
+    outcome_tracker.save_alert_outcomes(outcomes)
+
+    assert outcome_file.read_text(encoding="utf-8") == (
+        "[\n"
+        "  {\n"
+        '    "alert_id": "BTCUSDT-1",\n'
         '    "symbol": "BTCUSDT",\n'
         '    "hit_5pct": true\n'
         "  }\n"
@@ -79,6 +111,28 @@ def test_load_alert_outcomes_reads_json(monkeypatch, tmp_path) -> None:
             '    "symbol": "BTCUSDT"\n'
             "  }\n"
             "]"
+        ),
+        encoding="utf-8",
+    )
+
+    assert outcome_tracker.load_alert_outcomes() == {
+        "BTCUSDT-1": {"alert_id": "BTCUSDT-1", "symbol": "BTCUSDT"}
+    }
+
+
+def test_load_alert_outcomes_reads_json_mapping(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(outcome_tracker, "USE_SUPABASE", False)
+    outcome_file = tmp_path / "data" / "alert_outcomes.json"
+    monkeypatch.setattr(outcome_tracker, "OUTCOME_FILE", str(outcome_file))
+    outcome_file.parent.mkdir(parents=True)
+    outcome_file.write_text(
+        (
+            "{\n"
+            '  "BTCUSDT-1": {\n'
+            '    "alert_id": "BTCUSDT-1",\n'
+            '    "symbol": "BTCUSDT"\n'
+            "  }\n"
+            "}"
         ),
         encoding="utf-8",
     )

@@ -17,10 +17,12 @@ def ensure_data_dir() -> None:
     Path(OUTCOME_FILE).parent.mkdir(parents=True, exist_ok=True)
 
 
-def save_alert_outcomes(outcomes: list[dict]) -> None:
-    """Save alert outcome records to disk."""
+def save_alert_outcomes(outcomes: list[dict] | dict) -> None:
+    """Save alert outcome records to Supabase or local JSON."""
+    outcome_records = _normalize_outcomes(outcomes)
+
     if USE_SUPABASE:
-        for outcome in outcomes:
+        for outcome in outcome_records:
             supabase_store.upsert_alert_outcome(outcome)
         return
 
@@ -28,7 +30,7 @@ def save_alert_outcomes(outcomes: list[dict]) -> None:
     outcome_path = Path(OUTCOME_FILE)
 
     with outcome_path.open("w", encoding="utf-8") as file:
-        json.dump(outcomes, file, indent=2)
+        json.dump(outcome_records, file, indent=2)
 
 
 def load_alert_outcomes() -> dict:
@@ -47,14 +49,35 @@ def load_alert_outcomes() -> dict:
     except (json.JSONDecodeError, OSError):
         return {}
 
-    if not isinstance(outcomes, list):
-        return {}
+    outcome_records = _normalize_outcomes(outcomes)
 
     return {
         outcome["alert_id"]: outcome
-        for outcome in outcomes
+        for outcome in outcome_records
         if isinstance(outcome, dict) and outcome.get("alert_id")
     }
+
+
+def _normalize_outcomes(outcomes: list[dict] | dict) -> list[dict]:
+    """Return outcome records as a list, accepting list or alert-id mapping."""
+    if isinstance(outcomes, list):
+        return [
+            outcome
+            for outcome in outcomes
+            if isinstance(outcome, dict)
+        ]
+
+    if not isinstance(outcomes, dict):
+        return []
+
+    if outcomes.get("alert_id"):
+        return [outcomes]
+
+    return [
+        outcome
+        for outcome in outcomes.values()
+        if isinstance(outcome, dict)
+    ]
 
 
 def _parse_alerted_at(alerted_at: str | None) -> datetime | None:
