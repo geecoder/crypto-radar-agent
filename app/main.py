@@ -14,6 +14,10 @@ from app.analysis.performance_report import (
     build_performance_report,
     format_performance_report,
 )
+from app.analysis.paper_trading_report import (
+    build_paper_trading_report,
+    format_paper_trading_report,
+)
 from app.analysis.signal_analysis import (
     build_signal_analysis,
     format_signal_analysis,
@@ -27,6 +31,11 @@ from app.reporting import (
     format_top_opportunity_detail,
 )
 from app.scanner import get_alert_candidates, get_best_setups, scan_symbols
+from app.trading.paper_trading import (
+    create_paper_trades_from_alerts,
+    load_all_paper_trades,
+    update_open_paper_trades,
+)
 
 TELEGRAM_TEST_MESSAGE = "✅ Crypto Radar Agent Telegram test message."
 
@@ -58,6 +67,16 @@ def parse_args() -> argparse.Namespace:
         "--signal-analysis",
         action="store_true",
         help="Print a saved alert outcome signal performance analysis and exit.",
+    )
+    parser.add_argument(
+        "--update-paper-trades",
+        action="store_true",
+        help="Update open paper trades using public market candles and exit.",
+    )
+    parser.add_argument(
+        "--paper-trading-report",
+        action="store_true",
+        help="Print a simulated paper trading performance report and exit.",
     )
     return parser.parse_args()
 
@@ -126,6 +145,22 @@ def main() -> None:
         print(format_signal_analysis(analysis))
         return
 
+    if args.update_paper_trades:
+        client = BinancePublicClient()
+        summary = update_open_paper_trades(client)
+
+        print("Paper trade update completed.")
+        print(f"Open trades checked: {summary['open_trades_checked']}")
+        print(f"Closed trades: {summary['closed_trades']}")
+        print(f"Still open: {summary['still_open']}")
+        return
+
+    if args.paper_trading_report:
+        paper_trades = load_all_paper_trades()
+        report = build_paper_trading_report(paper_trades)
+        print(format_paper_trading_report(report))
+        return
+
     client = BinancePublicClient()
     exchange_info = client.get_exchange_info()
     active_symbols = get_active_usdt_symbols(exchange_info)
@@ -175,13 +210,26 @@ def main() -> None:
             return
 
         telegram_sent = send_telegram_message(format_alert_message(candidates_to_send))
+        paper_trade_candidates = []
 
         for candidate in candidates_to_send:
-            append_alert_history(candidate, telegram_sent=telegram_sent)
+            history_record = append_alert_history(candidate, telegram_sent=telegram_sent)
+
+            if isinstance(history_record, dict):
+                paper_trade_candidates.append(
+                    {
+                        **candidate,
+                        "alert_id": history_record.get("id"),
+                    }
+                )
+            else:
+                paper_trade_candidates.append(candidate)
 
             if telegram_sent:
                 record_alert(candidate["symbol"], _get_opportunity_score(candidate))
 
+        paper_trades = create_paper_trades_from_alerts(paper_trade_candidates)
+        print(f"Paper trades created: {len(paper_trades)}")
         return
 
     best_setups = get_best_setups(opportunities, limit=10)

@@ -256,6 +256,37 @@ def test_main_updates_paper_trades_and_exits(monkeypatch, capsys) -> None:
     assert "Still open: 1" in output
 
 
+def test_main_prints_paper_trading_report_and_exits(monkeypatch, capsys) -> None:
+    paper_trades = [
+        {
+            "symbol": "BTCUSDT",
+            "status": "closed",
+            "pnl_pct": 8,
+            "pnl_amount": 8,
+            "exit_reason": "take_profit_1",
+        }
+    ]
+
+    monkeypatch.setattr(sys, "argv", ["python -m app.main", "--paper-trading-report"])
+    monkeypatch.setattr(app_main, "load_all_paper_trades", lambda: paper_trades)
+    monkeypatch.setattr(
+        app_main,
+        "scan_symbols",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("Scanner should not run in paper-trading-report mode.")
+        ),
+    )
+
+    app_main.main()
+
+    output = capsys.readouterr().out
+
+    assert "Crypto Radar Agent started" in output
+    assert "Crypto Radar Paper Trading Report" in output
+    assert "Total trades: 1" in output
+    assert "Average P/L: 8%" in output
+
+
 def test_main_sends_alert_message_when_candidates_exist(monkeypatch, capsys) -> None:
     sent_messages = []
     recorded_alerts = []

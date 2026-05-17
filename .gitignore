@@ -21,6 +21,8 @@ env/
 data/alert_state.json
 data/alert_history.json
 data/alert_outcomes.json
+data/paper_trades.json
+data/paper_trade_events.json
 
 # IDE/editor
 .idea/

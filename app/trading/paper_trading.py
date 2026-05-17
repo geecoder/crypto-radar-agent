@@ -295,6 +295,11 @@ def load_paper_trades(limit: int | None = None) -> list[dict]:
     return trades
 
 
+def load_all_paper_trades(limit: int | None = None) -> list[dict]:
+    """Load all persisted paper trades from the configured backend."""
+    return load_paper_trades(limit=limit)
+
+
 def _build_trade_event(trade: dict, event_type: str) -> dict:
     """Build a JSON-friendly paper trade event."""
     occurred_at = (
