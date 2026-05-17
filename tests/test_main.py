@@ -222,6 +222,40 @@ def test_main_prints_signal_analysis_and_exits(monkeypatch, capsys) -> None:
     assert "Stage 3 - Confirmed early momentum" in output
 
 
+def test_main_updates_paper_trades_and_exits(monkeypatch, capsys) -> None:
+    fake_client = object()
+    summary = {
+        "open_trades_checked": 2,
+        "closed_trades": 1,
+        "still_open": 1,
+    }
+
+    monkeypatch.setattr(sys, "argv", ["python -m app.main", "--update-paper-trades"])
+    monkeypatch.setattr(app_main, "BinancePublicClient", lambda: fake_client)
+    monkeypatch.setattr(
+        app_main,
+        "update_open_paper_trades",
+        lambda client: summary if client is fake_client else {},
+    )
+    monkeypatch.setattr(
+        app_main,
+        "scan_symbols",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("Scanner should not run in paper-trade update mode.")
+        ),
+    )
+
+    app_main.main()
+
+    output = capsys.readouterr().out
+
+    assert "Crypto Radar Agent started" in output
+    assert "Paper trade update completed." in output
+    assert "Open trades checked: 2" in output
+    assert "Closed trades: 1" in output
+    assert "Still open: 1" in output
+
+
 def test_main_sends_alert_message_when_candidates_exist(monkeypatch, capsys) -> None:
     sent_messages = []
     recorded_alerts = []

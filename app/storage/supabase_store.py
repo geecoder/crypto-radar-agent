@@ -90,6 +90,54 @@ def _ensure_tables(connection) -> None:
             )
             """
         )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS paper_trades (
+                id TEXT PRIMARY KEY,
+                alert_id TEXT,
+                symbol TEXT,
+                opened_at TIMESTAMPTZ,
+                closed_at TIMESTAMPTZ,
+                entry_price NUMERIC,
+                exit_price NUMERIC,
+                status TEXT,
+                direction TEXT,
+                opportunity_score INTEGER,
+                classification TEXT,
+                target_bucket TEXT,
+                continuation_target TEXT,
+                move_stage TEXT,
+                move_from_recent_low_pct NUMERIC,
+                liquidity_label TEXT,
+                exhaustion_risk_level TEXT,
+                stop_loss_pct NUMERIC,
+                take_profit_1_pct NUMERIC,
+                take_profit_2_pct NUMERIC,
+                take_profit_3_pct NUMERIC,
+                max_hold_hours INTEGER,
+                simulated_position_size NUMERIC,
+                exit_reason TEXT,
+                pnl_pct NUMERIC,
+                pnl_amount NUMERIC,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+            """
+        )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS paper_trade_events (
+                paper_trade_id TEXT,
+                symbol TEXT,
+                event_time TIMESTAMPTZ,
+                event_type TEXT,
+                price NUMERIC,
+                notes TEXT,
+                metadata JSONB,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+            """
+        )
 
     connection.commit()
 
@@ -406,6 +454,333 @@ def load_alert_outcomes() -> dict:
     }
 
 
+def insert_paper_trade(record: dict) -> None:
+    """Insert a simulated paper trade and ignore duplicate IDs."""
+    record_id = record.get("id")
+
+    if not record_id:
+        raise ValueError("Paper trade record must include an id.")
+
+    connection = get_connection()
+
+    try:
+        with connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    INSERT INTO paper_trades (
+                        id,
+                        alert_id,
+                        symbol,
+                        opened_at,
+                        closed_at,
+                        entry_price,
+                        exit_price,
+                        status,
+                        direction,
+                        opportunity_score,
+                        classification,
+                        target_bucket,
+                        continuation_target,
+                        move_stage,
+                        move_from_recent_low_pct,
+                        liquidity_label,
+                        exhaustion_risk_level,
+                        stop_loss_pct,
+                        take_profit_1_pct,
+                        take_profit_2_pct,
+                        take_profit_3_pct,
+                        max_hold_hours,
+                        simulated_position_size,
+                        exit_reason,
+                        pnl_pct,
+                        pnl_amount
+                    )
+                    VALUES (
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                        %s, %s, %s, %s, %s, %s, %s, %s
+                    )
+                    ON CONFLICT (id) DO NOTHING
+                    """,
+                    (
+                        record_id,
+                        record.get("alert_id"),
+                        record.get("symbol"),
+                        record.get("opened_at"),
+                        record.get("closed_at"),
+                        record.get("entry_price"),
+                        record.get("exit_price"),
+                        record.get("status"),
+                        record.get("direction"),
+                        record.get("opportunity_score"),
+                        record.get("classification"),
+                        record.get("target_bucket"),
+                        record.get("continuation_target"),
+                        record.get("move_stage"),
+                        record.get("move_from_recent_low_pct"),
+                        record.get("liquidity_label"),
+                        record.get("exhaustion_risk_level"),
+                        record.get("stop_loss_pct"),
+                        record.get("take_profit_1_pct"),
+                        record.get("take_profit_2_pct"),
+                        record.get("take_profit_3_pct"),
+                        record.get("max_hold_hours"),
+                        record.get("simulated_position_size"),
+                        record.get("exit_reason"),
+                        record.get("pnl_pct"),
+                        record.get("pnl_amount"),
+                    ),
+                )
+    finally:
+        connection.close()
+
+
+def get_open_paper_trades() -> list[dict]:
+    """Load open simulated paper trades from Supabase."""
+    connection = get_connection()
+
+    try:
+        with connection:
+            with connection.cursor(cursor_factory=RealDictCursor) as cursor:
+                cursor.execute(
+                    """
+                    SELECT
+                        id,
+                        alert_id,
+                        symbol,
+                        opened_at,
+                        closed_at,
+                        entry_price,
+                        exit_price,
+                        status,
+                        direction,
+                        opportunity_score,
+                        classification,
+                        target_bucket,
+                        continuation_target,
+                        move_stage,
+                        move_from_recent_low_pct,
+                        liquidity_label,
+                        exhaustion_risk_level,
+                        stop_loss_pct,
+                        take_profit_1_pct,
+                        take_profit_2_pct,
+                        take_profit_3_pct,
+                        max_hold_hours,
+                        simulated_position_size,
+                        pnl_pct,
+                        pnl_amount,
+                        exit_reason,
+                        created_at,
+                        updated_at
+                    FROM paper_trades
+                    WHERE status = %s
+                    ORDER BY opened_at ASC, id ASC
+                    """,
+                    ("open",),
+                )
+                rows = cursor.fetchall()
+    finally:
+        connection.close()
+
+    return [_paper_trade_row_to_record(row) for row in rows]
+
+
+def update_paper_trade(trade_id: str, updates: dict) -> None:
+    """Update a simulated paper trade by ID."""
+    if not trade_id:
+        raise ValueError("trade_id is required.")
+
+    if not updates:
+        return
+
+    column_by_key = {
+        "alert_id": "alert_id",
+        "symbol": "symbol",
+        "opened_at": "opened_at",
+        "closed_at": "closed_at",
+        "entry_price": "entry_price",
+        "exit_price": "exit_price",
+        "status": "status",
+        "direction": "direction",
+        "opportunity_score": "opportunity_score",
+        "classification": "classification",
+        "target_bucket": "target_bucket",
+        "continuation_target": "continuation_target",
+        "move_stage": "move_stage",
+        "move_from_recent_low_pct": "move_from_recent_low_pct",
+        "liquidity_label": "liquidity_label",
+        "exhaustion_risk_level": "exhaustion_risk_level",
+        "stop_loss_pct": "stop_loss_pct",
+        "take_profit_1_pct": "take_profit_1_pct",
+        "take_profit_2_pct": "take_profit_2_pct",
+        "take_profit_3_pct": "take_profit_3_pct",
+        "max_hold_hours": "max_hold_hours",
+        "simulated_position_size": "simulated_position_size",
+        "exit_reason": "exit_reason",
+        "pnl_pct": "pnl_pct",
+        "pnl_amount": "pnl_amount",
+    }
+    set_clauses = []
+    values = []
+
+    for key, column in column_by_key.items():
+        if key in updates:
+            set_clauses.append(f"{column} = %s")
+            values.append(updates[key])
+
+    set_clauses.append("updated_at = NOW()")
+    values.append(trade_id)
+
+    connection = get_connection()
+
+    try:
+        with connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    f"""
+                    UPDATE paper_trades
+                    SET {", ".join(set_clauses)}
+                    WHERE id = %s
+                    """,
+                    tuple(values),
+                )
+    finally:
+        connection.close()
+
+
+def insert_paper_trade_event(record: dict) -> None:
+    """Insert one simulated paper trade event."""
+    paper_trade_id = _first_present(record, "paper_trade_id", "trade_id")
+
+    if not paper_trade_id:
+        raise ValueError("Paper trade event record must include a paper_trade_id.")
+
+    connection = get_connection()
+
+    try:
+        with connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    INSERT INTO paper_trade_events (
+                        paper_trade_id,
+                        symbol,
+                        event_time,
+                        event_type,
+                        price,
+                        notes,
+                        metadata
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        paper_trade_id,
+                        record.get("symbol"),
+                        _first_present(record, "event_time", "occurred_at"),
+                        _first_present(record, "type", "event_type"),
+                        _paper_trade_event_price(record),
+                        _paper_trade_event_notes(record),
+                        Json(record.get("metadata", record)),
+                    ),
+                )
+    finally:
+        connection.close()
+
+
+def load_paper_trades(limit: int | None = None) -> list[dict]:
+    """Load simulated paper trades from Supabase."""
+    connection = get_connection()
+
+    if limit is not None:
+        limit = max(0, int(limit))
+
+    try:
+        with connection:
+            with connection.cursor(cursor_factory=RealDictCursor) as cursor:
+                if limit is None:
+                    cursor.execute(
+                        """
+                        SELECT
+                            id,
+                            alert_id,
+                            symbol,
+                            opened_at,
+                            closed_at,
+                            entry_price,
+                            exit_price,
+                            status,
+                            direction,
+                            opportunity_score,
+                            classification,
+                            target_bucket,
+                            continuation_target,
+                            move_stage,
+                            move_from_recent_low_pct,
+                            liquidity_label,
+                            exhaustion_risk_level,
+                            stop_loss_pct,
+                            take_profit_1_pct,
+                            take_profit_2_pct,
+                            take_profit_3_pct,
+                            max_hold_hours,
+                            simulated_position_size,
+                            pnl_pct,
+                            pnl_amount,
+                            exit_reason,
+                            created_at,
+                            updated_at
+                        FROM paper_trades
+                        ORDER BY opened_at DESC, id ASC
+                        """
+                    )
+                else:
+                    cursor.execute(
+                        """
+                        SELECT
+                            id,
+                            alert_id,
+                            symbol,
+                            opened_at,
+                            closed_at,
+                            entry_price,
+                            exit_price,
+                            status,
+                            direction,
+                            opportunity_score,
+                            classification,
+                            target_bucket,
+                            continuation_target,
+                            move_stage,
+                            move_from_recent_low_pct,
+                            liquidity_label,
+                            exhaustion_risk_level,
+                            stop_loss_pct,
+                            take_profit_1_pct,
+                            take_profit_2_pct,
+                            take_profit_3_pct,
+                            max_hold_hours,
+                            simulated_position_size,
+                            pnl_pct,
+                            pnl_amount,
+                            exit_reason,
+                            created_at,
+                            updated_at
+                        FROM paper_trades
+                        ORDER BY opened_at DESC, id ASC
+                        LIMIT %s
+                        """,
+                        (limit,),
+                    )
+
+                rows = cursor.fetchall()
+    finally:
+        connection.close()
+
+    return [_paper_trade_row_to_record(row) for row in rows]
+
+
 def _alert_history_row_to_record(row: dict) -> dict:
     """Map a structured alert_history row into the app's history dictionary."""
     return {
@@ -460,6 +835,76 @@ def _alert_outcome_row_to_record(row: dict) -> dict:
         record[app_key] = bool(row.get(db_key))
 
     return record
+
+
+def _paper_trade_row_to_record(row: dict) -> dict:
+    """Map a paper_trades row into a JSON-friendly trade dictionary."""
+    return {
+        "id": row.get("id"),
+        "alert_id": row.get("alert_id"),
+        "symbol": row.get("symbol"),
+        "opened_at": _to_iso(row.get("opened_at")),
+        "closed_at": _to_iso(row.get("closed_at")),
+        "entry_price": _to_plain_number(row.get("entry_price")),
+        "exit_price": _to_plain_number(row.get("exit_price")),
+        "status": row.get("status"),
+        "direction": row.get("direction"),
+        "opportunity_score": row.get("opportunity_score"),
+        "classification": row.get("classification"),
+        "target_bucket": row.get("target_bucket"),
+        "continuation_target": row.get("continuation_target"),
+        "move_stage": row.get("move_stage"),
+        "move_from_recent_low_pct": _to_plain_number(
+            row.get("move_from_recent_low_pct")
+        ),
+        "liquidity_label": row.get("liquidity_label"),
+        "exhaustion_risk_level": row.get("exhaustion_risk_level"),
+        "stop_loss_pct": _to_plain_number(row.get("stop_loss_pct")),
+        "take_profit_1_pct": _to_plain_number(row.get("take_profit_1_pct")),
+        "take_profit_2_pct": _to_plain_number(row.get("take_profit_2_pct")),
+        "take_profit_3_pct": _to_plain_number(row.get("take_profit_3_pct")),
+        "max_hold_hours": row.get("max_hold_hours"),
+        "simulated_position_size": _to_plain_number(
+            row.get("simulated_position_size")
+        ),
+        "pnl_pct": _to_plain_number(row.get("pnl_pct")),
+        "pnl_amount": _to_plain_number(row.get("pnl_amount")),
+        "exit_reason": row.get("exit_reason"),
+        "created_at": _to_iso(row.get("created_at")),
+        "updated_at": _to_iso(row.get("updated_at")),
+    }
+
+
+def _paper_trade_event_price(record: dict) -> Any:
+    """Read a trade event price from top-level or nested event details."""
+    details = record.get("details") or {}
+    event_type = _first_present(record, "event_type", "type")
+
+    if record.get("price") is not None:
+        return record.get("price")
+
+    if event_type == "opened":
+        return _first_present(record, "entry_price") or details.get("entry_price")
+
+    return (
+        _first_present(record, "exit_price", "entry_price")
+        or details.get("exit_price")
+        or details.get("entry_price")
+    )
+
+
+def _paper_trade_event_notes(record: dict) -> Any:
+    """Build a compact note for a paper trade event."""
+    if record.get("notes") is not None:
+        return record.get("notes")
+
+    details = record.get("details") or {}
+    exit_reason = _first_present(record, "exit_reason") or details.get("exit_reason")
+
+    if exit_reason:
+        return f"exit_reason={exit_reason}"
+
+    return None
 
 
 def _to_iso(value: Any) -> Any:
