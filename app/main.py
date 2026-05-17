@@ -36,6 +36,7 @@ from app.trading.paper_trading import (
     load_all_paper_trades,
     update_open_paper_trades,
 )
+from app.trading.strategy_config import get_strategy_by_name
 
 TELEGRAM_TEST_MESSAGE = "✅ Crypto Radar Agent Telegram test message."
 
@@ -77,6 +78,14 @@ def parse_args() -> argparse.Namespace:
         "--paper-trading-report",
         action="store_true",
         help="Print a simulated paper trading performance report and exit.",
+    )
+    parser.add_argument(
+        "--paper-strategy",
+        default=None,
+        help=(
+            "Paper trading strategy for newly created simulated trades "
+            "(default, conservative, aggressive)."
+        ),
     )
     return parser.parse_args()
 
@@ -161,6 +170,8 @@ def main() -> None:
         print(format_paper_trading_report(report))
         return
 
+    paper_strategy = get_strategy_by_name(args.paper_strategy)
+
     client = BinancePublicClient()
     exchange_info = client.get_exchange_info()
     active_symbols = get_active_usdt_symbols(exchange_info)
@@ -228,7 +239,10 @@ def main() -> None:
             if telegram_sent:
                 record_alert(candidate["symbol"], _get_opportunity_score(candidate))
 
-        paper_trades = create_paper_trades_from_alerts(paper_trade_candidates)
+        paper_trades = create_paper_trades_from_alerts(
+            paper_trade_candidates,
+            strategy=paper_strategy,
+        )
         print(f"Paper trades created: {len(paper_trades)}")
         return
 

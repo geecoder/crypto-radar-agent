@@ -14,6 +14,10 @@ import pandas as pd
 from app.binance.client import klines_to_dataframe
 from app.config import USE_SUPABASE
 from app.storage import supabase_store
+from app.trading.strategy_config import (
+    PaperTradingStrategy,
+    get_default_paper_trading_strategy,
+)
 
 PAPER_TRADES_FILE = "data/paper_trades.json"
 PAPER_TRADE_EVENTS_FILE = "data/paper_trade_events.json"
@@ -25,8 +29,12 @@ ALLOWED_CONTINUATION_TARGETS = {
 }
 
 
-def build_paper_trade_from_alert(result: dict) -> dict:
+def build_paper_trade_from_alert(
+    result: dict,
+    strategy: PaperTradingStrategy | None = None,
+) -> dict:
     """Build a simulated long trade from one alert candidate."""
+    strategy = strategy or get_default_paper_trading_strategy()
     opened_at = _utc_now_iso()
     symbol = str(result.get("symbol") or "UNKNOWN")
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
@@ -34,6 +42,7 @@ def build_paper_trade_from_alert(result: dict) -> dict:
     return {
         "id": f"paper_{symbol}_{timestamp}",
         "alert_id": _first_present(result, "alert_id", "id"),
+        "strategy_name": strategy.name,
         "symbol": symbol,
         "opened_at": opened_at,
         "entry_price": result.get("latest_close"),
@@ -47,35 +56,54 @@ def build_paper_trade_from_alert(result: dict) -> dict:
         "move_from_recent_low_pct": _get_move_from_recent_low_pct(result),
         "liquidity_label": _get_liquidity_label(result),
         "exhaustion_risk_level": _get_exhaustion_risk_level(result),
-        "stop_loss_pct": -5,
-        "take_profit_1_pct": 8,
-        "take_profit_2_pct": 15,
-        "take_profit_3_pct": 20,
-        "max_hold_hours": 48,
-        "simulated_position_size": 100,
+        "stop_loss_pct": strategy.stop_loss_pct,
+        "take_profit_1_pct": strategy.take_profit_1_pct,
+        "take_profit_2_pct": strategy.take_profit_2_pct,
+        "take_profit_3_pct": strategy.take_profit_3_pct,
+        "max_hold_hours": strategy.max_hold_hours,
+        "simulated_position_size": strategy.simulated_position_size,
     }
 
 
-def should_create_paper_trade(result: dict) -> tuple[bool, str]:
+def should_create_paper_trade(
+    result: dict,
+    strategy: PaperTradingStrategy | None = None,
+) -> tuple[bool, str]:
     """Return whether an alert candidate qualifies for a simulated trade."""
+    strategy = strategy or get_default_paper_trading_strategy()
     opportunity_score = _safe_float(_get_opportunity_value(result, "opportunity_score"))
 
-    if opportunity_score < 65:
-        return False, "Opportunity score is below 65."
+    if opportunity_score < strategy.minimum_opportunity_score:
+        return (
+            False,
+            f"Opportunity score is below {strategy.minimum_opportunity_score}.",
+        )
 
     move_pct = _safe_float(_get_move_from_recent_low_pct(result), default=None)
 
-    if move_pct is None or not 3 <= move_pct <= 20:
-        return False, "Move from recent low must be between 3% and 20%."
+    if (
+        move_pct is None
+        or move_pct < strategy.min_move_from_recent_low_pct
+        or move_pct > strategy.max_move_from_recent_low_pct
+    ):
+        return (
+            False,
+            "Move from recent low must be between "
+            f"{strategy.min_move_from_recent_low_pct:g}% and "
+            f"{strategy.max_move_from_recent_low_pct:g}%.",
+        )
 
     exhaustion_level = str(_get_exhaustion_risk_level(result) or "").strip()
 
-    if exhaustion_level.lower() == "high":
+    if not strategy.allow_high_exhaustion and exhaustion_level.lower() == "high":
         return False, "Exhaustion risk is High."
 
     liquidity_label = str(_get_liquidity_label(result) or "").strip()
 
-    if liquidity_label.lower() in {"thin", "very thin"}:
+    if not strategy.allow_thin_liquidity and liquidity_label.lower() in {
+        "thin",
+        "very thin",
+    }:
         return False, "Liquidity is too thin for a paper trade."
 
     continuation_target = _get_continuation_target(result)
@@ -86,17 +114,21 @@ def should_create_paper_trade(result: dict) -> tuple[bool, str]:
     return True, "Paper trade eligible."
 
 
-def create_paper_trades_from_alerts(alert_candidates: list[dict]) -> list[dict]:
+def create_paper_trades_from_alerts(
+    alert_candidates: list[dict],
+    strategy: PaperTradingStrategy | None = None,
+) -> list[dict]:
     """Create and persist simulated paper trades for eligible alerts."""
+    strategy = strategy or get_default_paper_trading_strategy()
     created_trades = []
 
     for candidate in alert_candidates:
-        should_create, _reason = should_create_paper_trade(candidate)
+        should_create, _reason = should_create_paper_trade(candidate, strategy)
 
         if not should_create:
             continue
 
-        trade = build_paper_trade_from_alert(candidate)
+        trade = build_paper_trade_from_alert(candidate, strategy)
         _insert_paper_trade(trade)
         _insert_paper_trade_event(_build_trade_event(trade, "opened"))
         created_trades.append(trade)

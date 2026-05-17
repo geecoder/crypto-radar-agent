@@ -95,6 +95,7 @@ def _ensure_tables(connection) -> None:
             CREATE TABLE IF NOT EXISTS paper_trades (
                 id TEXT PRIMARY KEY,
                 alert_id TEXT,
+                strategy_name TEXT,
                 symbol TEXT,
                 opened_at TIMESTAMPTZ,
                 closed_at TIMESTAMPTZ,
@@ -122,6 +123,12 @@ def _ensure_tables(connection) -> None:
                 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                 updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
             )
+            """
+        )
+        cursor.execute(
+            """
+            ALTER TABLE paper_trades
+            ADD COLUMN IF NOT EXISTS strategy_name TEXT
             """
         )
         cursor.execute(
@@ -471,6 +478,7 @@ def insert_paper_trade(record: dict) -> None:
                     INSERT INTO paper_trades (
                         id,
                         alert_id,
+                        strategy_name,
                         symbol,
                         opened_at,
                         closed_at,
@@ -499,13 +507,14 @@ def insert_paper_trade(record: dict) -> None:
                     VALUES (
                         %s, %s, %s, %s, %s, %s, %s, %s, %s,
                         %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                        %s, %s, %s, %s, %s, %s, %s, %s
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s
                     )
                     ON CONFLICT (id) DO NOTHING
                     """,
                     (
                         record_id,
                         record.get("alert_id"),
+                        record.get("strategy_name"),
                         record.get("symbol"),
                         record.get("opened_at"),
                         record.get("closed_at"),
@@ -548,6 +557,7 @@ def get_open_paper_trades() -> list[dict]:
                     SELECT
                         id,
                         alert_id,
+                        strategy_name,
                         symbol,
                         opened_at,
                         closed_at,
@@ -597,6 +607,7 @@ def update_paper_trade(trade_id: str, updates: dict) -> None:
 
     column_by_key = {
         "alert_id": "alert_id",
+        "strategy_name": "strategy_name",
         "symbol": "symbol",
         "opened_at": "opened_at",
         "closed_at": "closed_at",
@@ -705,6 +716,7 @@ def load_paper_trades(limit: int | None = None) -> list[dict]:
                         SELECT
                             id,
                             alert_id,
+                            strategy_name,
                             symbol,
                             opened_at,
                             closed_at,
@@ -741,6 +753,7 @@ def load_paper_trades(limit: int | None = None) -> list[dict]:
                         SELECT
                             id,
                             alert_id,
+                            strategy_name,
                             symbol,
                             opened_at,
                             closed_at,
@@ -842,6 +855,7 @@ def _paper_trade_row_to_record(row: dict) -> dict:
     return {
         "id": row.get("id"),
         "alert_id": row.get("alert_id"),
+        "strategy_name": row.get("strategy_name"),
         "symbol": row.get("symbol"),
         "opened_at": _to_iso(row.get("opened_at")),
         "closed_at": _to_iso(row.get("closed_at")),

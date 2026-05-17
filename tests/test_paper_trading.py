@@ -117,6 +117,7 @@ def test_build_paper_trade_from_alert() -> None:
 
     assert trade["id"].startswith("paper_BTCUSDT_")
     assert trade["alert_id"] == "alert-1"
+    assert trade["strategy_name"] == "default_momentum_continuation"
     assert trade["symbol"] == "BTCUSDT"
     assert trade["entry_price"] == 100.0
     assert trade["status"] == "open"

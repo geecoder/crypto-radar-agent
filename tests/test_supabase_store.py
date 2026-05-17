@@ -56,6 +56,7 @@ def _paper_trade_row() -> dict:
     return {
         "id": "paper_BTCUSDT_20260517T120000Z",
         "alert_id": "alert-1",
+        "strategy_name": "default_momentum_continuation",
         "symbol": "BTCUSDT",
         "opened_at": opened_at,
         "closed_at": None,
@@ -173,6 +174,7 @@ def test_get_open_paper_trades_maps_structured_columns(monkeypatch) -> None:
     assert fake_connection.params == [("open",)]
     assert fake_connection.closed is True
     assert trade["id"] == "paper_BTCUSDT_20260517T120000Z"
+    assert trade["strategy_name"] == "default_momentum_continuation"
     assert trade["opened_at"] == "2026-05-17T12:00:00+00:00"
     assert trade["entry_price"] == 100.5
     assert trade["move_from_recent_low_pct"] == 8.5

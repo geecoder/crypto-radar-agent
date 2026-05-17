@@ -287,6 +287,65 @@ def test_main_prints_paper_trading_report_and_exits(monkeypatch, capsys) -> None
     assert "Average P/L: 8%" in output
 
 
+def test_main_passes_selected_paper_strategy_to_trade_creation(monkeypatch) -> None:
+    captured_strategy_names = []
+    candidate = {
+        "symbol": "BTCUSDT",
+        "latest_close": 100.0,
+        "opportunity": {
+            "opportunity_score": 80,
+            "classification": "Watchlist",
+            "target_bucket": "+20% momentum setup",
+            "risk_level": "Medium",
+            "summary": "Watchlist. Some signals are improving.",
+        },
+    }
+    fake_client = SimpleNamespace(
+        get_exchange_info=lambda: {"symbols": []},
+        get_24hr_tickers=lambda: [],
+    )
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["python -m app.main", "--paper-strategy", "conservative"],
+    )
+    monkeypatch.setattr(app_main, "BinancePublicClient", lambda: fake_client)
+    monkeypatch.setattr(app_main, "get_active_usdt_symbols", lambda exchange_info: ["BTCUSDT"])
+    monkeypatch.setattr(
+        app_main,
+        "select_priority_symbols",
+        lambda active_symbols, tickers_24hr, max_symbols=50: ["BTCUSDT"],
+    )
+    monkeypatch.setattr(
+        app_main,
+        "scan_symbols",
+        lambda client, symbols, interval="15m", limit=100, max_symbols=50, tickers_24hr=None: [candidate],
+    )
+    monkeypatch.setattr(app_main, "should_send_alert", lambda symbol, score: (True, "ok"))
+    monkeypatch.setattr(app_main, "send_telegram_message", lambda message: True)
+    monkeypatch.setattr(
+        app_main,
+        "append_alert_history",
+        lambda result, telegram_sent: {"id": "alert-1"},
+    )
+    monkeypatch.setattr(app_main, "record_alert", lambda symbol, score: None)
+
+    def fake_create_paper_trades_from_alerts(alert_candidates, strategy=None):
+        captured_strategy_names.append(strategy.name)
+        return []
+
+    monkeypatch.setattr(
+        app_main,
+        "create_paper_trades_from_alerts",
+        fake_create_paper_trades_from_alerts,
+    )
+
+    app_main.main()
+
+    assert captured_strategy_names == ["conservative_momentum"]
+
+
 def test_main_sends_alert_message_when_candidates_exist(monkeypatch, capsys) -> None:
     sent_messages = []
     recorded_alerts = []
