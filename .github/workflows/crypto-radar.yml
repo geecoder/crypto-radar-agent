@@ -15,6 +15,7 @@ jobs:
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
       TELEGRAM_ALERTS_ENABLED: ${{ secrets.TELEGRAM_ALERTS_ENABLED }}
+      BINANCE_BASE_URL_ORDER: data-api,api1,api2,api3,api
 
     steps:
       - name: Check out repository

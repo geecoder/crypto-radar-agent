@@ -9,7 +9,34 @@ from typing import Any
 import pandas as pd
 import requests
 
-from app.config import DEBUG
+from app.config import BINANCE_BASE_URL_ORDER, BINANCE_BASE_URL_ORDER_IS_SET, DEBUG
+
+
+BASE_URL_BY_TOKEN = {
+    "data-api": "https://data-api.binance.vision",
+    "api": "https://api.binance.com",
+    "api1": "https://api1.binance.com",
+    "api2": "https://api2.binance.com",
+    "api3": "https://api3.binance.com",
+}
+FALLBACK_BASE_URL_ORDER = ("data-api", "api1", "api2", "api3", "api")
+
+
+def build_base_urls_from_order(order: str | None) -> list[str]:
+    """Convert a comma-separated token order into Binance base URLs."""
+    if not order:
+        tokens = list(FALLBACK_BASE_URL_ORDER)
+    else:
+        tokens = [
+            token.strip().lower()
+            for token in order.split(",")
+            if token.strip()
+        ]
+
+    if not tokens or any(token not in BASE_URL_BY_TOKEN for token in tokens):
+        tokens = list(FALLBACK_BASE_URL_ORDER)
+
+    return [BASE_URL_BY_TOKEN[token] for token in tokens]
 
 
 class BinancePublicClient:
@@ -24,13 +51,12 @@ class BinancePublicClient:
         Args:
             timeout: Request timeout in seconds.
         """
-        self.base_urls = [
-            "https://data-api.binance.vision",
-            "https://api1.binance.com",
-            "https://api2.binance.com",
-            "https://api3.binance.com",
-            "https://api.binance.com",
-        ]
+        configured_order = (
+            BINANCE_BASE_URL_ORDER
+            if BINANCE_BASE_URL_ORDER_IS_SET
+            else None
+        )
+        self.base_urls = build_base_urls_from_order(configured_order)
         self.timeout = timeout
 
     def _get(

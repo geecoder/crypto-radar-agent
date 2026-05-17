@@ -7,6 +7,13 @@ import requests
 from app.binance.client import BinancePublicClient, klines_to_dataframe
 
 
+@pytest.fixture(autouse=True)
+def default_binance_base_url_order(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep Binance URL order tests independent from the local .env file."""
+    monkeypatch.setattr("app.binance.client.BINANCE_BASE_URL_ORDER", "")
+    monkeypatch.setattr("app.binance.client.BINANCE_BASE_URL_ORDER_IS_SET", False)
+
+
 class FakeResponse:
     """Small response stub for no-network client tests."""
 
@@ -34,6 +41,58 @@ def test_binance_public_client_base_urls_are_ordered() -> None:
     client = BinancePublicClient()
 
     assert client.base_urls == expected_base_urls
+
+
+def test_binance_public_client_uses_configured_base_url_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "app.binance.client.BINANCE_BASE_URL_ORDER",
+        "api,api1,api2,api3,data-api",
+    )
+    monkeypatch.setattr("app.binance.client.BINANCE_BASE_URL_ORDER_IS_SET", True)
+    expected_base_urls = [
+        "https://api.binance.com",
+        "https://api1.binance.com",
+        "https://api2.binance.com",
+        "https://api3.binance.com",
+        "https://data-api.binance.vision",
+    ]
+
+    client = BinancePublicClient()
+
+    assert client.base_urls == expected_base_urls
+
+
+def test_binance_public_client_uses_short_explicit_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("app.binance.client.BINANCE_BASE_URL_ORDER", "data-api,api")
+    monkeypatch.setattr("app.binance.client.BINANCE_BASE_URL_ORDER_IS_SET", True)
+
+    client = BinancePublicClient()
+
+    assert client.base_urls == [
+        "https://data-api.binance.vision",
+        "https://api.binance.com",
+    ]
+
+
+def test_binance_public_client_falls_back_when_order_is_invalid(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("app.binance.client.BINANCE_BASE_URL_ORDER", "api,unknown")
+    monkeypatch.setattr("app.binance.client.BINANCE_BASE_URL_ORDER_IS_SET", True)
+
+    client = BinancePublicClient()
+
+    assert client.base_urls == [
+        "https://data-api.binance.vision",
+        "https://api1.binance.com",
+        "https://api2.binance.com",
+        "https://api3.binance.com",
+        "https://api.binance.com",
+    ]
 
 
 def test_binance_public_client_retries_451_with_next_base_url(
