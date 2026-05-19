@@ -1,0 +1,282 @@
+"""Advisory trade-plan generation for alert candidates.
+
+This module only produces monitoring and paper-trading guidance. It never
+places real orders and never touches private exchange APIs.
+"""
+
+DEFAULT_MAX_HOLD_HOURS = 48
+PAPER_TRADE_BLOCKED_LIQUIDITY_LABELS = {"thin", "very thin"}
+
+
+def generate_trade_plan(result: dict) -> dict:
+    """Generate a structured advisory trade plan from one scan result."""
+    symbol = str(result.get("symbol") or "UNKNOWN")
+    alert_type = _get_alert_type(result)
+    latest_close = _safe_float(result.get("latest_close"), default=0.0) or 0.0
+
+    if alert_type == "Early Pump Alert":
+        return _build_directional_plan(
+            result=result,
+            symbol=symbol,
+            alert_type=alert_type,
+            latest_close=latest_close,
+            trade_plan_type="early_momentum_continuation",
+            recommended_action="Monitor for confirmation or pullback",
+            entry_approach="Wait for 15m candle confirmation or shallow pullback",
+            entry_zone_low_pct=-3,
+            stop_loss_pct=-5,
+            take_profit_1_pct=8,
+            take_profit_2_pct=15,
+            take_profit_3_pct=20,
+            should_paper_trade=_has_tradeable_liquidity_and_exhaustion(result),
+            reason=(
+                "Early pump alert plan; paper trade requires liquidity above "
+                "Thin and exhaustion risk below High."
+            ),
+        )
+
+    if alert_type == "Active Breakout Alert":
+        return _build_directional_plan(
+            result=result,
+            symbol=symbol,
+            alert_type=alert_type,
+            latest_close=latest_close,
+            trade_plan_type="active_breakout_continuation",
+            recommended_action=(
+                "Monitor breakout continuation; avoid chasing large candle tops"
+            ),
+            entry_approach=(
+                "Prefer retest of breakout zone or 15m close above resistance"
+            ),
+            entry_zone_low_pct=-4,
+            stop_loss_pct=-6,
+            take_profit_1_pct=10,
+            take_profit_2_pct=20,
+            take_profit_3_pct=35,
+            should_paper_trade=_has_tradeable_liquidity_and_exhaustion(result),
+            reason=(
+                "Active breakout alert plan; paper trade requires liquidity "
+                "above Thin and exhaustion risk below High."
+            ),
+        )
+
+    if alert_type == "Continuation Alert":
+        should_paper_trade, reason = _existing_paper_trading_rules_pass(result)
+        return _build_directional_plan(
+            result=result,
+            symbol=symbol,
+            alert_type=alert_type,
+            latest_close=latest_close,
+            trade_plan_type="standard_continuation",
+            recommended_action="Monitor for continuation setup",
+            entry_approach="Use confirmation candle or pullback entry",
+            entry_zone_low_pct=-2,
+            stop_loss_pct=-5,
+            take_profit_1_pct=8,
+            take_profit_2_pct=15,
+            take_profit_3_pct=20,
+            should_paper_trade=should_paper_trade,
+            reason=reason,
+        )
+
+    if alert_type == "Parabolic Watch Alert":
+        return {
+            **_base_plan(symbol, alert_type, latest_close),
+            "trade_plan_type": "parabolic_watch_only",
+            "recommended_action": "Watch only; do not chase",
+            "entry_approach": (
+                "Wait for pullback, consolidation, or retest. "
+                "No clean entry currently."
+            ),
+            "entry_zone_low": None,
+            "entry_zone_high": None,
+            "stop_loss_price": None,
+            "stop_loss_pct": None,
+            "take_profit_1_price": None,
+            "take_profit_1_pct": None,
+            "take_profit_2_price": None,
+            "take_profit_2_pct": None,
+            "take_profit_3_price": None,
+            "take_profit_3_pct": None,
+            "max_hold_hours": None,
+            "invalidation_rule": (
+                "No clean trade plan generated. Monitoring only until a "
+                "pullback, consolidation, or retest forms."
+            ),
+            "risk_note": (
+                "Very high risk. This is a market activity alert, not a "
+                "clean entry signal."
+            ),
+            "should_paper_trade": False,
+            "reason": "Parabolic watch alerts are monitoring-only.",
+        }
+
+    return {
+        **_base_plan(symbol, alert_type, latest_close),
+        "trade_plan_type": "no_trade_plan",
+        "recommended_action": "Monitor only",
+        "entry_approach": "No alert-specific trade plan is available.",
+        "entry_zone_low": None,
+        "entry_zone_high": None,
+        "stop_loss_price": None,
+        "stop_loss_pct": None,
+        "take_profit_1_price": None,
+        "take_profit_1_pct": None,
+        "take_profit_2_price": None,
+        "take_profit_2_pct": None,
+        "take_profit_3_price": None,
+        "take_profit_3_pct": None,
+        "max_hold_hours": None,
+        "invalidation_rule": "No alert trigger is active.",
+        "risk_note": "No clean trade plan generated.",
+        "should_paper_trade": False,
+        "reason": "No supported alert type is active.",
+    }
+
+
+def round_price(price: float) -> float:
+    """Round prices while preserving useful precision for small tokens."""
+    price = _safe_float(price, default=0.0) or 0.0
+
+    if price >= 1000:
+        return round(price, 2)
+    if price >= 1:
+        return round(price, 4)
+    if price >= 0.01:
+        return round(price, 6)
+    return round(price, 8)
+
+
+def _build_directional_plan(
+    result: dict,
+    symbol: str,
+    alert_type: str,
+    latest_close: float,
+    trade_plan_type: str,
+    recommended_action: str,
+    entry_approach: str,
+    entry_zone_low_pct: float,
+    stop_loss_pct: float,
+    take_profit_1_pct: float,
+    take_profit_2_pct: float,
+    take_profit_3_pct: float,
+    should_paper_trade: bool,
+    reason: str,
+) -> dict:
+    """Build a plan for alerts that may become paper trades."""
+    return {
+        **_base_plan(symbol, alert_type, latest_close),
+        "trade_plan_type": trade_plan_type,
+        "recommended_action": recommended_action,
+        "entry_approach": entry_approach,
+        "entry_zone_low": _price_at_pct(latest_close, entry_zone_low_pct),
+        "entry_zone_high": round_price(latest_close),
+        "stop_loss_price": _price_at_pct(latest_close, stop_loss_pct),
+        "stop_loss_pct": stop_loss_pct,
+        "take_profit_1_price": _price_at_pct(latest_close, take_profit_1_pct),
+        "take_profit_1_pct": take_profit_1_pct,
+        "take_profit_2_price": _price_at_pct(latest_close, take_profit_2_pct),
+        "take_profit_2_pct": take_profit_2_pct,
+        "take_profit_3_price": _price_at_pct(latest_close, take_profit_3_pct),
+        "take_profit_3_pct": take_profit_3_pct,
+        "max_hold_hours": DEFAULT_MAX_HOLD_HOURS,
+        "invalidation_rule": _directional_invalidation_rule(result, stop_loss_pct),
+        "risk_note": _directional_risk_note(result),
+        "should_paper_trade": bool(should_paper_trade),
+        "reason": reason,
+    }
+
+
+def _base_plan(symbol: str, alert_type: str, latest_close: float) -> dict:
+    """Return fields shared by all trade plans."""
+    return {
+        "symbol": symbol,
+        "alert_type": alert_type,
+        "latest_close": round_price(latest_close),
+    }
+
+
+def _get_alert_type(result: dict) -> str:
+    """Read the alert type from an alert or scanner result."""
+    if result.get("alert_type"):
+        return str(result.get("alert_type"))
+
+    explosive_mover = result.get("explosive_mover") or {}
+
+    if explosive_mover.get("should_alert"):
+        return str(explosive_mover.get("alert_type", "Explosive Mover Alert"))
+
+    return "Continuation Alert"
+
+
+def _has_tradeable_liquidity_and_exhaustion(result: dict) -> bool:
+    """Return whether simple risk checks allow a paper trade."""
+    liquidity_label = _get_liquidity_label(result).lower()
+    exhaustion_level = _get_exhaustion_risk_level(result).lower()
+
+    return (
+        liquidity_label not in PAPER_TRADE_BLOCKED_LIQUIDITY_LABELS
+        and exhaustion_level != "high"
+    )
+
+
+def _existing_paper_trading_rules_pass(result: dict) -> tuple[bool, str]:
+    """Run the existing paper-trading eligibility checks for continuation plans."""
+    from app.trading.paper_trading import should_create_paper_trade
+
+    planless_result = {
+        key: value
+        for key, value in result.items()
+        if key != "trade_plan"
+    }
+    return should_create_paper_trade(planless_result)
+
+
+def _directional_invalidation_rule(result: dict, stop_loss_pct: float) -> str:
+    """Build a plain-English invalidation rule for directional plans."""
+    return (
+        f"Invalidate if price closes below the planned stop ({stop_loss_pct:g}%) "
+        "or if momentum/volume confirmation fails."
+    )
+
+
+def _directional_risk_note(result: dict) -> str:
+    """Build a risk note from liquidity and exhaustion context."""
+    liquidity_label = _get_liquidity_label(result) or "Not available"
+    exhaustion_level = _get_exhaustion_risk_level(result) or "Not available"
+
+    return (
+        f"Advisory/paper-trading plan only. Liquidity: {liquidity_label}. "
+        f"Exhaustion risk: {exhaustion_level}."
+    )
+
+
+def _price_at_pct(latest_close: float, pct: float) -> float:
+    """Return a rounded price offset from latest close by pct."""
+    return round_price(latest_close * (1 + (pct / 100)))
+
+
+def _get_liquidity_label(result: dict) -> str:
+    """Read liquidity label from nested or flattened result data."""
+    if result.get("liquidity_label") is not None:
+        return str(result.get("liquidity_label"))
+
+    liquidity_signal = result.get("liquidity_signal") or {}
+    return str(liquidity_signal.get("label", ""))
+
+
+def _get_exhaustion_risk_level(result: dict) -> str:
+    """Read exhaustion risk level from nested or flattened result data."""
+    if result.get("exhaustion_risk_level") is not None:
+        return str(result.get("exhaustion_risk_level"))
+
+    exhaustion_signal = result.get("exhaustion_signal") or {}
+    return str(exhaustion_signal.get("risk_level", ""))
+
+
+def _safe_float(value, default: float | None = 0.0) -> float | None:
+    """Convert a value to float, returning default on failure."""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default

@@ -44,6 +44,26 @@ def _sample_result() -> dict:
             "risk_level": "Medium",
             "summary": "Watchlist. Some signals are improving.",
         },
+        "trade_plan": {
+            "trade_plan_type": "standard_continuation",
+            "recommended_action": "Monitor for continuation setup",
+            "entry_approach": "Use confirmation candle or pullback entry",
+            "entry_zone_low": 98.49,
+            "entry_zone_high": 100.5,
+            "stop_loss_price": 95.475,
+            "stop_loss_pct": -5,
+            "take_profit_1_price": 108.54,
+            "take_profit_1_pct": 8,
+            "take_profit_2_price": 115.575,
+            "take_profit_2_pct": 15,
+            "take_profit_3_price": 120.6,
+            "take_profit_3_pct": 20,
+            "max_hold_hours": 48,
+            "invalidation_rule": "Invalidate below planned stop.",
+            "risk_note": "Advisory/paper-trading plan only.",
+            "should_paper_trade": True,
+            "reason": "Paper trade eligible.",
+        },
     }
 
 
@@ -116,6 +136,15 @@ def test_format_alert_message_returns_telegram_html() -> None:
     assert "Liquidity Quality: Strong" in message
     assert "Latest close: 100.5" in message
     assert "Summary: Watchlist. Some signals are improving." in message
+    assert "Trade Plan:" in message
+    assert "Recommended action: Monitor for continuation setup" in message
+    assert "Entry approach: Use confirmation candle or pullback entry" in message
+    assert "Entry zone: 98.49 - 100.5" in message
+    assert "Stop-loss: 95.475 (-5%)" in message
+    assert "TP1: 108.54 (8%)" in message
+    assert "Max hold: 48h" in message
+    assert "Invalidation rule: Invalidate below planned stop." in message
+    assert "Risk note: Advisory/paper-trading plan only." in message
     assert "Not financial advice. Use this as a monitoring signal only." in message
 
 
@@ -144,6 +173,20 @@ def test_format_alert_message_includes_explosive_mover_context() -> None:
             "activity alert."
         ),
     }
+    result["trade_plan"] = {
+        "trade_plan_type": "parabolic_watch_only",
+        "recommended_action": "Watch only; do not chase",
+        "entry_approach": (
+            "Wait for pullback, consolidation, or retest. "
+            "No clean entry currently."
+        ),
+        "invalidation_rule": "No clean trade plan generated.",
+        "risk_note": (
+            "Very high risk. This is a market activity alert, not a clean "
+            "entry signal."
+        ),
+        "should_paper_trade": False,
+    }
 
     message = format_alert_message([result])
 
@@ -158,6 +201,9 @@ def test_format_alert_message_includes_explosive_mover_context() -> None:
         "High risk. This is a market activity alert, not a clean entry signal. "
         "Avoid chasing vertical candles. Watch for pullback/retest."
     ) in message
+    assert "No clean trade plan generated." in message
+    assert "Monitoring only." in message
+    assert "Paper trade skipped." in message
 
 
 def test_format_alert_message_escapes_html_values() -> None:

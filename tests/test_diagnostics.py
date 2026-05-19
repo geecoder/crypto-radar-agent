@@ -63,6 +63,15 @@ def _diagnostic_result(score: int = 55) -> dict:
                 "exhaustion_risk": 60,
             },
         },
+        "trade_plan": {
+            "trade_plan_type": "no_trade_plan",
+            "recommended_action": "Monitor only",
+            "entry_approach": "No alert-specific trade plan is available.",
+            "invalidation_rule": "No alert trigger is active.",
+            "risk_note": "No clean trade plan generated.",
+            "should_paper_trade": False,
+            "reason": "No supported alert type is active.",
+        },
     }
 
 
@@ -196,6 +205,10 @@ def test_format_diagnostic_report_includes_required_fields_and_reasons() -> None
     assert "- 24h: 6.00%" in report
     assert "- 1h ratio: 1.50x" in report
     assert "- 2h ratio: 2.00x" in report
+    assert "Trade Plan:" in report
+    assert "- Type: no_trade_plan" in report
+    assert "- Recommended action: Monitor only" in report
+    assert "- Should paper trade: false" in report
     assert "- volume: 20" in report
     assert "- exhaustion_risk: 60" in report
     assert "Rejected: score below alert threshold." in report
@@ -212,6 +225,21 @@ def test_format_diagnostic_report_marks_explosive_mover_as_alert_candidate() -> 
             "activity alert."
         ),
     }
+    result["trade_plan"] = {
+        "trade_plan_type": "parabolic_watch_only",
+        "recommended_action": "Watch only; do not chase",
+        "entry_approach": (
+            "Wait for pullback, consolidation, or retest. "
+            "No clean entry currently."
+        ),
+        "invalidation_rule": "No clean trade plan generated.",
+        "risk_note": (
+            "Very high risk. This is a market activity alert, not a clean "
+            "entry signal."
+        ),
+        "should_paper_trade": False,
+        "reason": "Parabolic watch alerts are monitoring-only.",
+    }
 
     report = format_diagnostic_report(result, alert_threshold=60)
 
@@ -219,9 +247,12 @@ def test_format_diagnostic_report_marks_explosive_mover_as_alert_candidate() -> 
     assert "Explosive mover alert type: Parabolic Watch Alert" in report
     assert "Explosive mover should_alert: true" in report
     assert "Would trigger Parabolic Watch Alert? true" in report
+    assert "- Type: parabolic_watch_only" in report
+    assert "- No clean trade plan generated." in report
+    assert "- Monitoring only." in report
+    assert "- Paper trade skipped." in report
     assert (
-        "This does not qualify as a clean continuation trade, but it "
-        "qualifies as a Parabolic Watch Alert."
+        "This qualifies as a Parabolic Watch Alert but not as a clean trade setup."
     ) in report
 
 

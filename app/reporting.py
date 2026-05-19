@@ -59,6 +59,107 @@ def _is_explosive_alert_type(alert_type: str) -> bool:
     }
 
 
+def _format_plan_price(value) -> str:
+    """Format an optional trade-plan price."""
+    if value is None:
+        return "Not available"
+
+    return str(value)
+
+
+def _format_plan_pct(value) -> str:
+    """Format an optional trade-plan percentage."""
+    if value is None:
+        return "Not available"
+
+    try:
+        return f"{float(value):g}%"
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def _format_trade_plan_lines(trade_plan: dict | None) -> list[str]:
+    """Format a trade plan section for Telegram alerts."""
+    if not trade_plan:
+        return [
+            "Trade Plan:",
+            "No clean trade plan generated.",
+            "Monitoring only.",
+            "Paper trade skipped.",
+        ]
+
+    if trade_plan.get("trade_plan_type") == "parabolic_watch_only":
+        return [
+            "Trade Plan:",
+            "No clean trade plan generated.",
+            "Monitoring only.",
+            "Paper trade skipped.",
+            (
+                "Recommended action: "
+                f"{escape(str(trade_plan.get('recommended_action', 'Not available')))}"
+            ),
+            (
+                "Entry approach: "
+                f"{escape(str(trade_plan.get('entry_approach', 'Not available')))}"
+            ),
+            (
+                "Invalidation rule: "
+                f"{escape(str(trade_plan.get('invalidation_rule', 'Not available')))}"
+            ),
+            (
+                "Risk note: "
+                f"{escape(str(trade_plan.get('risk_note', 'Not available')))}"
+            ),
+        ]
+
+    entry_zone = (
+        f"{_format_plan_price(trade_plan.get('entry_zone_low'))} - "
+        f"{_format_plan_price(trade_plan.get('entry_zone_high'))}"
+    )
+
+    return [
+        "Trade Plan:",
+        (
+            "Recommended action: "
+            f"{escape(str(trade_plan.get('recommended_action', 'Not available')))}"
+        ),
+        (
+            "Entry approach: "
+            f"{escape(str(trade_plan.get('entry_approach', 'Not available')))}"
+        ),
+        f"Entry zone: {escape(entry_zone)}",
+        (
+            "Stop-loss: "
+            f"{escape(_format_plan_price(trade_plan.get('stop_loss_price')))} "
+            f"({_format_plan_pct(trade_plan.get('stop_loss_pct'))})"
+        ),
+        (
+            "TP1: "
+            f"{escape(_format_plan_price(trade_plan.get('take_profit_1_price')))} "
+            f"({_format_plan_pct(trade_plan.get('take_profit_1_pct'))})"
+        ),
+        (
+            "TP2: "
+            f"{escape(_format_plan_price(trade_plan.get('take_profit_2_price')))} "
+            f"({_format_plan_pct(trade_plan.get('take_profit_2_pct'))})"
+        ),
+        (
+            "TP3: "
+            f"{escape(_format_plan_price(trade_plan.get('take_profit_3_price')))} "
+            f"({_format_plan_pct(trade_plan.get('take_profit_3_pct'))})"
+        ),
+        f"Max hold: {escape(str(trade_plan.get('max_hold_hours', 'Not available')))}h",
+        (
+            "Invalidation rule: "
+            f"{escape(str(trade_plan.get('invalidation_rule', 'Not available')))}"
+        ),
+        (
+            "Risk note: "
+            f"{escape(str(trade_plan.get('risk_note', 'Not available')))}"
+        ),
+    ]
+
+
 def _get_interpretation(opportunity_score: int) -> str:
     """Return a short interpretation for an opportunity score."""
     if opportunity_score >= 70:
@@ -169,6 +270,7 @@ def format_alert_message(alert_candidates: list[dict]) -> str:
         liquidity_signal = candidate.get("liquidity_signal", {})
         recent_changes = candidate.get("recent_price_changes", {})
         volume_acceleration = candidate.get("volume_acceleration", {})
+        trade_plan = candidate.get("trade_plan", {})
 
         if _is_explosive_alert_type(alert_type):
             explosive_mover = candidate.get("explosive_mover", {})
@@ -244,6 +346,7 @@ def format_alert_message(alert_candidates: list[dict]) -> str:
                     "Avoid chasing vertical candles. Watch for pullback/retest."
                 )
 
+            lines.extend(_format_trade_plan_lines(trade_plan))
             continue
 
         lines.extend(
@@ -332,6 +435,7 @@ def format_alert_message(alert_candidates: list[dict]) -> str:
                 f"Summary: {escape(str(opportunity.get('summary', 'Not available')))}",
             ]
         )
+        lines.extend(_format_trade_plan_lines(trade_plan))
 
     lines.extend(
         [

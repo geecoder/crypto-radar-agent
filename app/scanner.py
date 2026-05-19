@@ -18,6 +18,7 @@ from app.indicators.trend import calculate_trend_alignment
 from app.indicators.volatility import calculate_volatility_potential
 from app.indicators.volume import calculate_volume_spike
 from app.scoring.opportunity_score import calculate_opportunity_score
+from app.trading.trade_plan import generate_trade_plan
 
 SCAN_DELAY_SECONDS = 0.1
 CONTINUATION_ALERT_TYPE = "Continuation Alert"
@@ -99,7 +100,7 @@ def scan_symbol(
             exhaustion_signal,
         )
 
-        return {
+        result = {
             "symbol": symbol,
             "latest_close": latest_close,
             "volume_signal": volume_signal,
@@ -116,6 +117,8 @@ def scan_symbol(
             "opportunity": opportunity,
             "continuation_target": continuation_target,
         }
+        result = _with_alert_type(result)
+        return result
     except Exception as error:
         return {
             "symbol": symbol,
@@ -218,10 +221,15 @@ def _get_alert_type(result: dict, minimum_score: int = 60) -> str:
 
 def _with_alert_type(result: dict, minimum_score: int = 60) -> dict:
     """Return a result copy annotated with its alert type."""
-    return {
+    annotated = {
         **result,
         "alert_type": _get_alert_type(result, minimum_score),
     }
+
+    if "trade_plan" not in annotated:
+        annotated["trade_plan"] = generate_trade_plan(annotated)
+
+    return annotated
 
 
 def _get_alert_sort_score(result: dict) -> int:

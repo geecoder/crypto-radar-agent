@@ -139,6 +139,36 @@ def test_build_paper_trade_from_alert() -> None:
     assert trade["simulated_position_size"] == 100
 
 
+def test_build_paper_trade_uses_trade_plan_risk_targets() -> None:
+    alert = _eligible_alert()
+    alert["trade_plan"] = {
+        "should_paper_trade": True,
+        "stop_loss_pct": -6,
+        "take_profit_1_pct": 10,
+        "take_profit_2_pct": 20,
+        "take_profit_3_pct": 35,
+        "max_hold_hours": 72,
+    }
+
+    trade = build_paper_trade_from_alert(alert)
+
+    assert trade["stop_loss_pct"] == -6
+    assert trade["take_profit_1_pct"] == 10
+    assert trade["take_profit_2_pct"] == 20
+    assert trade["take_profit_3_pct"] == 35
+    assert trade["max_hold_hours"] == 72
+
+
+def test_should_create_paper_trade_rejects_trade_plan_block() -> None:
+    alert = _eligible_alert()
+    alert["trade_plan"] = {"should_paper_trade": False}
+
+    should_create, reason = should_create_paper_trade(alert)
+
+    assert should_create is False
+    assert "Trade plan" in reason
+
+
 def test_create_paper_trades_from_alerts_saves_json_fallback(
     monkeypatch,
     tmp_path,

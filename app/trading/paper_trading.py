@@ -44,6 +44,7 @@ def build_paper_trade_from_alert(
     opened_at = _utc_now_iso()
     symbol = str(result.get("symbol") or "UNKNOWN")
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    trade_plan = _get_trade_plan(result)
 
     return {
         "id": f"paper_{symbol}_{timestamp}",
@@ -63,11 +64,31 @@ def build_paper_trade_from_alert(
         "move_from_recent_low_pct": _get_move_from_recent_low_pct(result),
         "liquidity_label": _get_liquidity_label(result),
         "exhaustion_risk_level": _get_exhaustion_risk_level(result),
-        "stop_loss_pct": strategy.stop_loss_pct,
-        "take_profit_1_pct": strategy.take_profit_1_pct,
-        "take_profit_2_pct": strategy.take_profit_2_pct,
-        "take_profit_3_pct": strategy.take_profit_3_pct,
-        "max_hold_hours": strategy.max_hold_hours,
+        "stop_loss_pct": _trade_plan_value(
+            trade_plan,
+            "stop_loss_pct",
+            strategy.stop_loss_pct,
+        ),
+        "take_profit_1_pct": _trade_plan_value(
+            trade_plan,
+            "take_profit_1_pct",
+            strategy.take_profit_1_pct,
+        ),
+        "take_profit_2_pct": _trade_plan_value(
+            trade_plan,
+            "take_profit_2_pct",
+            strategy.take_profit_2_pct,
+        ),
+        "take_profit_3_pct": _trade_plan_value(
+            trade_plan,
+            "take_profit_3_pct",
+            strategy.take_profit_3_pct,
+        ),
+        "max_hold_hours": _trade_plan_value(
+            trade_plan,
+            "max_hold_hours",
+            strategy.max_hold_hours,
+        ),
         "simulated_position_size": strategy.simulated_position_size,
     }
 
@@ -85,6 +106,11 @@ def should_create_paper_trade(
 
     if alert_type not in PAPER_TRADE_ALLOWED_ALERT_TYPES:
         return False, f"{alert_type} is not eligible for paper trading."
+
+    trade_plan = _get_trade_plan(result)
+
+    if trade_plan and not trade_plan.get("should_paper_trade", False):
+        return False, "Trade plan does not allow paper trading."
 
     opportunity_score = _safe_float(_get_opportunity_value(result, "opportunity_score"))
 
@@ -468,6 +494,24 @@ def _get_alert_type(result: dict) -> str:
         return str(explosive_mover.get("alert_type", "Explosive Mover Alert"))
 
     return "Continuation Alert"
+
+
+def _get_trade_plan(result: dict) -> dict:
+    """Return a trade plan dict when present."""
+    trade_plan = result.get("trade_plan")
+
+    if isinstance(trade_plan, dict):
+        return trade_plan
+
+    return {}
+
+
+def _trade_plan_value(trade_plan: dict, key: str, fallback: Any) -> Any:
+    """Read a trade-plan value with strategy fallback."""
+    if trade_plan.get(key) is not None:
+        return trade_plan.get(key)
+
+    return fallback
 
 
 def _get_continuation_target(result: dict) -> str | None:

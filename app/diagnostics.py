@@ -66,6 +66,7 @@ def format_diagnostic_report(result: dict, alert_threshold: int = 60) -> str:
     explosive_mover = result.get("explosive_mover", {})
     recent_changes = result.get("recent_price_changes", {})
     volume_acceleration = result.get("volume_acceleration", {})
+    trade_plan = result.get("trade_plan", {})
     component_scores = opportunity.get("component_scores", {})
     score = _get_opportunity_score(result)
     would_alert = score >= alert_threshold or _is_explosive_alert(result)
@@ -137,8 +138,10 @@ def format_diagnostic_report(result: dict, alert_threshold: int = 60) -> str:
             f"{_format_ratio(volume_acceleration.get('volume_acceleration_2h_ratio'))}"
         ),
         "",
-        "Component scores:",
+        "Trade Plan:",
     ]
+    lines.extend(_format_trade_plan_lines(trade_plan))
+    lines.extend(["", "Component scores:"])
     lines.extend(_format_component_scores(component_scores))
 
     rejection_reasons = get_rejection_reasons(result, alert_threshold)
@@ -201,10 +204,7 @@ def get_recommendation(result: dict, alert_threshold: int = 60) -> str:
     alert_type = _explosive_alert_type(result)
 
     if alert_type == "Parabolic Watch Alert" and score < alert_threshold:
-        return (
-            "This does not qualify as a clean continuation trade, but it "
-            "qualifies as a Parabolic Watch Alert."
-        )
+        return "This qualifies as a Parabolic Watch Alert but not as a clean trade setup."
 
     if score >= alert_threshold or _is_explosive_alert(result):
         return "This symbol currently qualifies as an alert candidate."
@@ -255,6 +255,75 @@ def _format_component_scores(component_scores: dict) -> list[str]:
         if name not in ordered_names:
             lines.append(f"- {name}: {value}")
 
+    return lines
+
+
+def _format_trade_plan_lines(trade_plan: dict | None) -> list[str]:
+    """Format a trade plan for diagnostic output."""
+    if not trade_plan:
+        return [
+            "- No clean trade plan generated.",
+            "- Monitoring only.",
+            "- Paper trade skipped.",
+        ]
+
+    lines = [
+        f"- Type: {trade_plan.get('trade_plan_type', 'Not available')}",
+        f"- Recommended action: {trade_plan.get('recommended_action', 'Not available')}",
+        f"- Entry approach: {trade_plan.get('entry_approach', 'Not available')}",
+    ]
+
+    if trade_plan.get("trade_plan_type") == "parabolic_watch_only":
+        lines.extend(
+            [
+                "- No clean trade plan generated.",
+                "- Monitoring only.",
+                "- Paper trade skipped.",
+            ]
+        )
+    else:
+        lines.extend(
+            [
+                (
+                    "- Entry zone: "
+                    f"{_format_optional(trade_plan.get('entry_zone_low'))} - "
+                    f"{_format_optional(trade_plan.get('entry_zone_high'))}"
+                ),
+                (
+                    "- Stop-loss: "
+                    f"{_format_optional(trade_plan.get('stop_loss_price'))} "
+                    f"({_format_pct(trade_plan.get('stop_loss_pct'))})"
+                ),
+                (
+                    "- TP1: "
+                    f"{_format_optional(trade_plan.get('take_profit_1_price'))} "
+                    f"({_format_pct(trade_plan.get('take_profit_1_pct'))})"
+                ),
+                (
+                    "- TP2: "
+                    f"{_format_optional(trade_plan.get('take_profit_2_price'))} "
+                    f"({_format_pct(trade_plan.get('take_profit_2_pct'))})"
+                ),
+                (
+                    "- TP3: "
+                    f"{_format_optional(trade_plan.get('take_profit_3_price'))} "
+                    f"({_format_pct(trade_plan.get('take_profit_3_pct'))})"
+                ),
+                f"- Max hold: {_format_optional(trade_plan.get('max_hold_hours'))}h",
+            ]
+        )
+
+    lines.extend(
+        [
+            f"- Invalidation rule: {trade_plan.get('invalidation_rule', 'Not available')}",
+            f"- Risk note: {trade_plan.get('risk_note', 'Not available')}",
+            (
+                "- Should paper trade: "
+                f"{_format_bool(bool(trade_plan.get('should_paper_trade')))}"
+            ),
+            f"- Reason: {trade_plan.get('reason', 'Not available')}",
+        ]
+    )
     return lines
 
 
@@ -309,6 +378,14 @@ def _format_ratio(value) -> str:
         return f"{float(value):.2f}x"
     except (TypeError, ValueError):
         return "Not available"
+
+
+def _format_optional(value) -> str:
+    """Format optional scalar values for diagnostics."""
+    if value is None:
+        return "Not available"
+
+    return str(value)
 
 
 def _format_bool(value: bool) -> str:
