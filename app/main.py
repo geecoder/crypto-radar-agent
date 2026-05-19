@@ -25,6 +25,7 @@ from app.analysis.signal_analysis import (
 from app.binance.client import BinancePublicClient
 from app.binance.market_filter import select_priority_symbols
 from app.binance.symbols import get_active_usdt_symbols
+from app.diagnostics import diagnose_symbol, format_diagnostic_report
 from app.reporting import (
     format_alert_message,
     format_opportunity_table,
@@ -39,6 +40,7 @@ from app.trading.paper_trading import (
 from app.trading.strategy_config import get_strategy_by_name
 
 TELEGRAM_TEST_MESSAGE = "✅ Crypto Radar Agent Telegram test message."
+ALERT_THRESHOLD = 60
 
 
 def parse_args() -> argparse.Namespace:
@@ -78,6 +80,11 @@ def parse_args() -> argparse.Namespace:
         "--paper-trading-report",
         action="store_true",
         help="Print a simulated paper trading performance report and exit.",
+    )
+    parser.add_argument(
+        "--diagnose-symbol",
+        default=None,
+        help="Diagnose why one Binance symbol would or would not alert.",
     )
     parser.add_argument(
         "--paper-strategy",
@@ -170,6 +177,16 @@ def main() -> None:
         print(format_paper_trading_report(report))
         return
 
+    if args.diagnose_symbol:
+        client = BinancePublicClient()
+        result = diagnose_symbol(
+            client,
+            args.diagnose_symbol,
+            alert_threshold=ALERT_THRESHOLD,
+        )
+        print(format_diagnostic_report(result, alert_threshold=ALERT_THRESHOLD))
+        return
+
     paper_strategy = get_strategy_by_name(args.paper_strategy)
 
     client = BinancePublicClient()
@@ -196,7 +213,10 @@ def main() -> None:
         tickers_24hr=tickers_24hr,
     )
 
-    alert_candidates = get_alert_candidates(opportunities, minimum_score=60)
+    alert_candidates = get_alert_candidates(
+        opportunities,
+        minimum_score=ALERT_THRESHOLD,
+    )
 
     if alert_candidates:
         print("Alert candidates:")

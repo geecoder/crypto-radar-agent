@@ -36,3 +36,6 @@ jobs:
 
       - name: Check alert outcomes
         run: python -m app.main --check-outcomes
+
+      - name: Update paper trades
+        run: python -m app.main --update-paper-trades

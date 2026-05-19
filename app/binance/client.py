@@ -113,6 +113,10 @@ class BinancePublicClient:
         """Return 24-hour ticker statistics for all Spot symbols."""
         return self._get("/api/v3/ticker/24hr")
 
+    def get_24hr_ticker(self, symbol: str) -> dict[str, Any]:
+        """Return 24-hour ticker statistics for one Spot symbol."""
+        return self._get("/api/v3/ticker/24hr", params={"symbol": symbol})
+
     def get_klines(
         self,
         symbol: str,

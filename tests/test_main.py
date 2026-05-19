@@ -287,6 +287,51 @@ def test_main_prints_paper_trading_report_and_exits(monkeypatch, capsys) -> None
     assert "Average P/L: 8%" in output
 
 
+def test_main_prints_symbol_diagnostic_and_exits(monkeypatch, capsys) -> None:
+    fake_client = object()
+    diagnostic_result = {
+        "symbol": "ENJUSDT",
+        "opportunity": {"opportunity_score": 55},
+    }
+    diagnose_calls = []
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["python -m app.main", "--diagnose-symbol", "ENJUSDT"],
+    )
+    monkeypatch.setattr(app_main, "BinancePublicClient", lambda: fake_client)
+    monkeypatch.setattr(
+        app_main,
+        "diagnose_symbol",
+        lambda client, symbol, alert_threshold=60: diagnose_calls.append(
+            (client, symbol, alert_threshold)
+        )
+        or diagnostic_result,
+    )
+    monkeypatch.setattr(
+        app_main,
+        "format_diagnostic_report",
+        lambda result, alert_threshold=60: "Missed Mover Diagnostic\nSymbol: ENJUSDT",
+    )
+    monkeypatch.setattr(
+        app_main,
+        "scan_symbols",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("Scanner should not run in diagnose mode.")
+        ),
+    )
+
+    app_main.main()
+
+    output = capsys.readouterr().out
+
+    assert diagnose_calls == [(fake_client, "ENJUSDT", app_main.ALERT_THRESHOLD)]
+    assert "Crypto Radar Agent started" in output
+    assert "Missed Mover Diagnostic" in output
+    assert "Symbol: ENJUSDT" in output
+
+
 def test_main_passes_selected_paper_strategy_to_trade_creation(monkeypatch) -> None:
     captured_strategy_names = []
     candidate = {

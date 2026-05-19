@@ -230,11 +230,13 @@ def test_binance_market_data_methods_use_shared_get(
     client = BinancePublicClient()
     client.get_exchange_info()
     client.get_24hr_tickers()
+    client.get_24hr_ticker("BTCUSDT")
     client.get_klines("btcusdt", interval="1h", limit=50)
 
     assert calls == [
         ("/api/v3/exchangeInfo", None),
         ("/api/v3/ticker/24hr", None),
+        ("/api/v3/ticker/24hr", {"symbol": "BTCUSDT"}),
         (
             "/api/v3/klines",
             {"symbol": "btcusdt", "interval": "1h", "limit": 50},
