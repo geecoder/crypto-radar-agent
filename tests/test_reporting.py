@@ -103,6 +103,7 @@ def test_format_alert_message_returns_telegram_html() -> None:
 
     assert "<b>🚨 Crypto Radar Alert Candidates</b>" in message
     assert "<b>BTCUSDT</b>" in message
+    assert "Alert Type: Continuation Alert" in message
     assert "Opportunity score: 72" in message
     assert "Classification: Watchlist" in message
     assert "Target bucket: +20% momentum setup" in message
@@ -116,6 +117,47 @@ def test_format_alert_message_returns_telegram_html() -> None:
     assert "Latest close: 100.5" in message
     assert "Summary: Watchlist. Some signals are improving." in message
     assert "Not financial advice. Use this as a monitoring signal only." in message
+
+
+def test_format_alert_message_includes_explosive_mover_context() -> None:
+    result = _sample_result()
+    result["alert_type"] = "Parabolic Watch Alert"
+    result["recent_price_changes"] = {
+        "change_15m_pct": 10,
+        "change_30m_pct": 20,
+        "change_1h_pct": 30,
+        "change_2h_pct": 40,
+        "change_4h_pct": 55,
+        "change_24h_pct": 80,
+    }
+    result["volume_acceleration"] = {
+        "volume_acceleration_1h_ratio": 5,
+        "volume_acceleration_2h_ratio": 3,
+    }
+    result["explosive_mover"] = {
+        "alert_type": "Parabolic Watch Alert",
+        "should_alert": True,
+        "potential_bucket": "High-risk parabolic watch",
+        "confidence": "High",
+        "reason": (
+            "This is not a clean entry signal. It is a high-risk market "
+            "activity alert."
+        ),
+    }
+
+    message = format_alert_message([result])
+
+    assert "Alert Type: Parabolic Watch Alert" in message
+    assert "Opportunity score: 72" in message
+    assert "15m change: 10.00%" in message
+    assert "24h change: 80.00%" in message
+    assert "Volume acceleration 1h: 5.00x" in message
+    assert "Potential bucket: High-risk parabolic watch" in message
+    assert "Confidence: High" in message
+    assert (
+        "High risk. This is a market activity alert, not a clean entry signal. "
+        "Avoid chasing vertical candles. Watch for pullback/retest."
+    ) in message
 
 
 def test_format_alert_message_escapes_html_values() -> None:

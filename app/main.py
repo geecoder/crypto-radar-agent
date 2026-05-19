@@ -23,7 +23,7 @@ from app.analysis.signal_analysis import (
     format_signal_analysis,
 )
 from app.binance.client import BinancePublicClient
-from app.binance.market_filter import select_priority_symbols
+from app.binance.market_filter import select_scan_universe
 from app.binance.symbols import get_active_usdt_symbols
 from app.diagnostics import diagnose_symbol, format_diagnostic_report
 from app.reporting import (
@@ -193,23 +193,24 @@ def main() -> None:
     exchange_info = client.get_exchange_info()
     active_symbols = get_active_usdt_symbols(exchange_info)
     tickers_24hr = client.get_24hr_tickers()
-    priority_symbols = select_priority_symbols(
+    scan_universe = select_scan_universe(
         active_symbols,
         tickers_24hr,
-        max_symbols=50,
+        max_priority_symbols=50,
+        max_universe_symbols=150,
     )
 
     print(f"Total active USDT symbols: {len(active_symbols)}")
-    print(f"Total priority symbols selected: {len(priority_symbols)}")
-    print(f"First 20 priority symbols: {priority_symbols[:20]}")
-    print("Scanning first 50 priority symbols...")
+    print(f"Total scan universe selected: {len(scan_universe)}")
+    print(f"First 30 scan universe symbols: {scan_universe[:30]}")
+    print(f"Scanning {len(scan_universe)} symbols...")
 
     opportunities = scan_symbols(
         client,
-        priority_symbols,
+        scan_universe,
         interval="15m",
         limit=100,
-        max_symbols=50,
+        max_symbols=len(scan_universe),
         tickers_24hr=tickers_24hr,
     )
 
@@ -263,6 +264,11 @@ def main() -> None:
             paper_trade_candidates,
             strategy=paper_strategy,
         )
+        if any(
+            candidate.get("alert_type") == "Parabolic Watch Alert"
+            for candidate in paper_trade_candidates
+        ):
+            print("Paper trade skipped: parabolic watch alerts are monitoring-only.")
         print(f"Paper trades created: {len(paper_trades)}")
         return
 

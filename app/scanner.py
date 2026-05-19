@@ -6,6 +6,11 @@ from app.binance.client import klines_to_dataframe
 from app.indicators.breakout import calculate_breakout_strength
 from app.indicators.continuation import calculate_continuation_target
 from app.indicators.exhaustion import calculate_exhaustion_risk
+from app.indicators.explosive_mover import (
+    calculate_recent_price_changes,
+    calculate_volume_acceleration,
+    classify_explosive_mover,
+)
 from app.indicators.liquidity import calculate_liquidity_quality
 from app.indicators.momentum import calculate_price_momentum
 from app.indicators.move_stage import calculate_move_stage
@@ -15,6 +20,12 @@ from app.indicators.volume import calculate_volume_spike
 from app.scoring.opportunity_score import calculate_opportunity_score
 
 SCAN_DELAY_SECONDS = 0.1
+CONTINUATION_ALERT_TYPE = "Continuation Alert"
+EXPLOSIVE_ALERT_PRIORITIES = {
+    "Parabolic Watch Alert": 95,
+    "Active Breakout Alert": 90,
+    "Early Pump Alert": 80,
+}
 
 
 def _get_opportunity_score(result: dict) -> int:
@@ -54,6 +65,8 @@ def scan_symbol(
         move_stage_signal = calculate_move_stage(candles)
         exhaustion_signal = calculate_exhaustion_risk(candles)
         liquidity_signal = calculate_liquidity_quality(ticker_24hr or {})
+        recent_price_changes = calculate_recent_price_changes(candles)
+        volume_acceleration = calculate_volume_acceleration(candles)
         opportunity = calculate_opportunity_score(
             volume_signal,
             momentum_signal,
@@ -63,6 +76,16 @@ def scan_symbol(
             move_stage_signal,
             liquidity_signal,
             exhaustion_signal,
+        )
+        explosive_mover = classify_explosive_mover(
+            move_stage_signal,
+            recent_price_changes,
+            volume_acceleration,
+            liquidity_signal,
+            exhaustion_signal,
+            breakout_signal,
+            trend_signal,
+            volatility_signal,
         )
         continuation_target = calculate_continuation_target(
             opportunity["opportunity_score"],
@@ -87,6 +110,9 @@ def scan_symbol(
             "move_stage_signal": move_stage_signal,
             "exhaustion_signal": exhaustion_signal,
             "liquidity_signal": liquidity_signal,
+            "recent_price_changes": recent_price_changes,
+            "volume_acceleration": volume_acceleration,
+            "explosive_mover": explosive_mover,
             "opportunity": opportunity,
             "continuation_target": continuation_target,
         }
@@ -151,14 +177,17 @@ def get_alert_candidates(
     results: list[dict],
     minimum_score: int = 60,
 ) -> list[dict]:
-    """Return valid scan results that meet the alert score threshold."""
+    """Return valid scan results that meet score or explosive alert criteria."""
     candidates = [
-        result
+        _with_alert_type(result, minimum_score)
         for result in _get_valid_results(results)
-        if _get_opportunity_score(result) >= minimum_score
+        if (
+            _get_opportunity_score(result) >= minimum_score
+            or _is_explosive_alert(result)
+        )
     ]
 
-    return sorted(candidates, key=_get_opportunity_score, reverse=True)
+    return sorted(candidates, key=_get_alert_sort_score, reverse=True)
 
 
 def get_best_setups(results: list[dict], limit: int = 10) -> list[dict]:
@@ -167,3 +196,39 @@ def get_best_setups(results: list[dict], limit: int = 10) -> list[dict]:
     sorted_results = sorted(valid_results, key=_get_opportunity_score, reverse=True)
 
     return sorted_results[:limit]
+
+
+def _is_explosive_alert(result: dict) -> bool:
+    """Return whether the explosive mover lane wants an alert."""
+    return bool(result.get("explosive_mover", {}).get("should_alert"))
+
+
+def _get_alert_type(result: dict, minimum_score: int = 60) -> str:
+    """Return the alert type for a candidate result."""
+    explosive_mover = result.get("explosive_mover", {})
+
+    if explosive_mover.get("should_alert"):
+        return explosive_mover.get("alert_type", "Explosive Mover Alert")
+
+    if _get_opportunity_score(result) >= minimum_score:
+        return CONTINUATION_ALERT_TYPE
+
+    return "No Alert"
+
+
+def _with_alert_type(result: dict, minimum_score: int = 60) -> dict:
+    """Return a result copy annotated with its alert type."""
+    return {
+        **result,
+        "alert_type": _get_alert_type(result, minimum_score),
+    }
+
+
+def _get_alert_sort_score(result: dict) -> int:
+    """Sort candidates by score while keeping explosive alerts visible."""
+    alert_type = result.get("alert_type") or result.get("explosive_mover", {}).get(
+        "alert_type",
+    )
+    explosive_priority = EXPLOSIVE_ALERT_PRIORITIES.get(alert_type, 0)
+
+    return max(_get_opportunity_score(result), explosive_priority)

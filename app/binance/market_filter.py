@@ -81,6 +81,40 @@ def _is_excluded_base_symbol(base_symbol: str) -> bool:
     )
 
 
+def _is_valid_active_usdt_symbol(symbol: str, active_symbol_set: set[str]) -> bool:
+    """Return whether a symbol can be considered for USDT scanning."""
+    if symbol not in active_symbol_set:
+        return False
+
+    if not _is_uppercase_alphanumeric(symbol):
+        return False
+
+    if not symbol.endswith("USDT"):
+        return False
+
+    base_symbol = _get_usdt_base_symbol(symbol)
+
+    return not _is_excluded_base_symbol(base_symbol)
+
+
+def _dedupe_preserve_order(symbols: list[str], max_symbols: int) -> list[str]:
+    """Deduplicate symbols while preserving the first useful ordering."""
+    seen = set()
+    deduped = []
+
+    for symbol in symbols:
+        if symbol in seen:
+            continue
+
+        seen.add(symbol)
+        deduped.append(symbol)
+
+        if len(deduped) >= max_symbols:
+            break
+
+    return deduped
+
+
 def select_priority_symbols(
     active_symbols: list[str],
     tickers_24hr: list[dict],
@@ -93,18 +127,7 @@ def select_priority_symbols(
     for ticker in tickers_24hr:
         symbol = ticker.get("symbol") or ""
 
-        if symbol not in active_symbol_set:
-            continue
-
-        if not _is_uppercase_alphanumeric(symbol):
-            continue
-
-        if not symbol.endswith("USDT"):
-            continue
-
-        base_symbol = _get_usdt_base_symbol(symbol)
-
-        if _is_excluded_base_symbol(base_symbol):
+        if not _is_valid_active_usdt_symbol(symbol, active_symbol_set):
             continue
 
         quote_volume = _safe_float(ticker.get("quoteVolume"))
@@ -142,3 +165,70 @@ def select_priority_symbols(
     )
 
     return [item["symbol"] for item in scored_symbols[:max_symbols]]
+
+
+def select_scan_universe(
+    active_symbols: list[str],
+    tickers_24hr: list[dict],
+    max_priority_symbols: int = 50,
+    max_universe_symbols: int = 150,
+) -> list[str]:
+    """Select an expanded scan universe including liquid names and top movers."""
+    active_symbol_set = set(active_symbols)
+    priority_symbols = select_priority_symbols(
+        active_symbols,
+        tickers_24hr,
+        max_symbols=max_priority_symbols,
+    )
+    eligible_tickers = []
+
+    for ticker in tickers_24hr:
+        symbol = ticker.get("symbol") or ""
+
+        if not _is_valid_active_usdt_symbol(symbol, active_symbol_set):
+            continue
+
+        eligible_tickers.append(
+            {
+                "symbol": symbol,
+                "quote_volume": _safe_float(ticker.get("quoteVolume")),
+                "price_change_percent": _safe_float(
+                    ticker.get("priceChangePercent")
+                ),
+                "count": _safe_int(ticker.get("count")),
+            }
+        )
+
+    top_gainers = [
+        item["symbol"]
+        for item in sorted(
+            (
+                item
+                for item in eligible_tickers
+                if item["price_change_percent"] > 0
+            ),
+            key=lambda item: (
+                item["price_change_percent"],
+                item["quote_volume"],
+                item["count"],
+                item["symbol"],
+            ),
+            reverse=True,
+        )[:50]
+    ]
+    high_movers = [
+        item["symbol"]
+        for item in eligible_tickers
+        if item["price_change_percent"] >= 8
+    ]
+    liquid_movers = [
+        item["symbol"]
+        for item in eligible_tickers
+        if item["quote_volume"] >= 5_000_000
+        and item["price_change_percent"] >= 5
+    ]
+
+    return _dedupe_preserve_order(
+        priority_symbols + top_gainers + high_movers + liquid_movers,
+        max_symbols=max_universe_symbols,
+    )

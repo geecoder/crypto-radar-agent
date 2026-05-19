@@ -66,6 +66,9 @@ def test_scan_symbol_returns_signals_and_opportunity_score() -> None:
     assert result["move_stage_signal"]["score"] == 45
     assert result["exhaustion_signal"]["risk_score"] == 20
     assert result["liquidity_signal"]["score"] == 80
+    assert result["recent_price_changes"]["name"] == "recent_price_changes"
+    assert result["volume_acceleration"]["name"] == "volume_acceleration"
+    assert result["explosive_mover"]["name"] == "explosive_mover"
     assert result["continuation_target"]["name"] == "continuation_target"
     assert result["opportunity"]["opportunity_score"] == 85
 
@@ -145,6 +148,36 @@ def test_get_alert_candidates_filters_errors_and_minimum_score() -> None:
     candidates = get_alert_candidates(results, minimum_score=60)
 
     assert [result["symbol"] for result in candidates] == ["BBBUSDT", "AAAUSDT"]
+    assert [result["alert_type"] for result in candidates] == [
+        "Continuation Alert",
+        "Continuation Alert",
+    ]
+
+
+def test_get_alert_candidates_includes_explosive_mover_alerts() -> None:
+    results = [
+        {
+            "symbol": "LOWUSDT",
+            "opportunity": {"opportunity_score": 20},
+            "explosive_mover": {
+                "should_alert": True,
+                "alert_type": "Parabolic Watch Alert",
+            },
+        },
+        {
+            "symbol": "QUIETUSDT",
+            "opportunity": {"opportunity_score": 20},
+            "explosive_mover": {
+                "should_alert": False,
+                "alert_type": "No explosive mover alert",
+            },
+        },
+    ]
+
+    candidates = get_alert_candidates(results, minimum_score=60)
+
+    assert [result["symbol"] for result in candidates] == ["LOWUSDT"]
+    assert candidates[0]["alert_type"] == "Parabolic Watch Alert"
 
 
 def test_get_best_setups_filters_errors_sorts_and_limits_results() -> None:

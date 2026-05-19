@@ -38,7 +38,10 @@ def diagnose_symbol(
 
     result["diagnostic"] = {
         "alert_threshold": alert_threshold,
-        "would_alert": _get_opportunity_score(result) >= alert_threshold,
+        "would_alert": (
+            _get_opportunity_score(result) >= alert_threshold
+            or _is_explosive_alert(result)
+        ),
     }
     return result
 
@@ -60,9 +63,12 @@ def format_diagnostic_report(result: dict, alert_threshold: int = 60) -> str:
     liquidity = result.get("liquidity_signal", {})
     exhaustion = result.get("exhaustion_signal", {})
     continuation = result.get("continuation_target", {})
+    explosive_mover = result.get("explosive_mover", {})
+    recent_changes = result.get("recent_price_changes", {})
+    volume_acceleration = result.get("volume_acceleration", {})
     component_scores = opportunity.get("component_scores", {})
     score = _get_opportunity_score(result)
-    would_alert = score >= alert_threshold
+    would_alert = score >= alert_threshold or _is_explosive_alert(result)
 
     lines = [
         "Missed Mover Diagnostic",
@@ -77,6 +83,34 @@ def format_diagnostic_report(result: dict, alert_threshold: int = 60) -> str:
             "Continuation target: "
             f"{continuation.get('target_bucket', 'Not available')}"
         ),
+        (
+            "Explosive mover alert type: "
+            f"{explosive_mover.get('alert_type', 'Not available')}"
+        ),
+        (
+            "Explosive mover should_alert: "
+            f"{str(bool(explosive_mover.get('should_alert'))).lower()}"
+        ),
+        (
+            "Explosive mover reason: "
+            f"{explosive_mover.get('reason', 'Not available')}"
+        ),
+        (
+            "Would trigger Continuation Alert? "
+            f"{_format_bool(score >= alert_threshold)}"
+        ),
+        (
+            "Would trigger Early Pump Alert? "
+            f"{_format_bool(_explosive_alert_type(result) == 'Early Pump Alert')}"
+        ),
+        (
+            "Would trigger Active Breakout Alert? "
+            f"{_format_bool(_explosive_alert_type(result) == 'Active Breakout Alert')}"
+        ),
+        (
+            "Would trigger Parabolic Watch Alert? "
+            f"{_format_bool(_explosive_alert_type(result) == 'Parabolic Watch Alert')}"
+        ),
         f"Move stage: {move_stage.get('stage', 'Not available')}",
         (
             "Move from recent low %: "
@@ -84,6 +118,24 @@ def format_diagnostic_report(result: dict, alert_threshold: int = 60) -> str:
         ),
         f"Liquidity label: {liquidity.get('label', 'Not available')}",
         f"Exhaustion risk: {exhaustion.get('risk_level', 'Not available')}",
+        "",
+        "Recent price changes:",
+        f"- 15m: {_format_pct(recent_changes.get('change_15m_pct'))}",
+        f"- 30m: {_format_pct(recent_changes.get('change_30m_pct'))}",
+        f"- 1h: {_format_pct(recent_changes.get('change_1h_pct'))}",
+        f"- 2h: {_format_pct(recent_changes.get('change_2h_pct'))}",
+        f"- 4h: {_format_pct(recent_changes.get('change_4h_pct'))}",
+        f"- 24h: {_format_pct(recent_changes.get('change_24h_pct'))}",
+        "",
+        "Volume acceleration:",
+        (
+            "- 1h ratio: "
+            f"{_format_ratio(volume_acceleration.get('volume_acceleration_1h_ratio'))}"
+        ),
+        (
+            "- 2h ratio: "
+            f"{_format_ratio(volume_acceleration.get('volume_acceleration_2h_ratio'))}"
+        ),
         "",
         "Component scores:",
     ]
@@ -146,8 +198,15 @@ def get_rejection_reasons(result: dict, alert_threshold: int = 60) -> list[str]:
 def get_recommendation(result: dict, alert_threshold: int = 60) -> str:
     """Return the final diagnostic recommendation."""
     score = _get_opportunity_score(result)
+    alert_type = _explosive_alert_type(result)
 
-    if score >= alert_threshold:
+    if alert_type == "Parabolic Watch Alert" and score < alert_threshold:
+        return (
+            "This does not qualify as a clean continuation trade, but it "
+            "qualifies as a Parabolic Watch Alert."
+        )
+
+    if score >= alert_threshold or _is_explosive_alert(result):
         return "This symbol currently qualifies as an alert candidate."
 
     if alert_threshold - score <= 10:
@@ -199,6 +258,16 @@ def _format_component_scores(component_scores: dict) -> list[str]:
     return lines
 
 
+def _is_explosive_alert(result: dict) -> bool:
+    """Return whether the explosive mover lane wants an alert."""
+    return bool(result.get("explosive_mover", {}).get("should_alert"))
+
+
+def _explosive_alert_type(result: dict) -> str:
+    """Read the explosive mover alert type."""
+    return str(result.get("explosive_mover", {}).get("alert_type", ""))
+
+
 def _get_opportunity_score(result: dict) -> int:
     """Read the opportunity score safely."""
     try:
@@ -232,3 +301,16 @@ def _format_pct(value) -> str:
         return f"{float(value):.2f}%"
     except (TypeError, ValueError):
         return "Not available"
+
+
+def _format_ratio(value) -> str:
+    """Format ratio values for diagnostic output."""
+    try:
+        return f"{float(value):.2f}x"
+    except (TypeError, ValueError):
+        return "Not available"
+
+
+def _format_bool(value: bool) -> str:
+    """Format booleans in the same style as classifier flags."""
+    return str(bool(value)).lower()

@@ -359,8 +359,8 @@ def test_main_passes_selected_paper_strategy_to_trade_creation(monkeypatch) -> N
     monkeypatch.setattr(app_main, "get_active_usdt_symbols", lambda exchange_info: ["BTCUSDT"])
     monkeypatch.setattr(
         app_main,
-        "select_priority_symbols",
-        lambda active_symbols, tickers_24hr, max_symbols=50: ["BTCUSDT"],
+        "select_scan_universe",
+        lambda active_symbols, tickers_24hr, max_priority_symbols=50, max_universe_symbols=150: ["BTCUSDT"],
     )
     monkeypatch.setattr(
         app_main,
@@ -417,8 +417,8 @@ def test_main_sends_alert_message_when_candidates_exist(monkeypatch, capsys) -> 
     monkeypatch.setattr(app_main, "get_active_usdt_symbols", lambda exchange_info: ["BTCUSDT"])
     monkeypatch.setattr(
         app_main,
-        "select_priority_symbols",
-        lambda active_symbols, tickers_24hr, max_symbols=50: ["BTCUSDT"],
+        "select_scan_universe",
+        lambda active_symbols, tickers_24hr, max_priority_symbols=50, max_universe_symbols=150: ["BTCUSDT"],
     )
     monkeypatch.setattr(
         app_main,
@@ -450,11 +450,80 @@ def test_main_sends_alert_message_when_candidates_exist(monkeypatch, capsys) -> 
     output = capsys.readouterr().out
 
     assert "Alert candidates:" in output
+    assert "Total scan universe selected: 1" in output
+    assert "First 30 scan universe symbols: ['BTCUSDT']" in output
+    assert "Scanning 1 symbols..." in output
     assert len(sent_messages) == 1
     assert "Crypto Radar Alert Candidates" in sent_messages[0]
     assert "BTCUSDT" in sent_messages[0]
     assert recorded_alerts == [("BTCUSDT", 72)]
     assert alert_history_records == [("BTCUSDT", True)]
+
+
+def test_main_skips_paper_trade_for_parabolic_watch_alert(monkeypatch, capsys) -> None:
+    sent_messages = []
+    candidate = {
+        "symbol": "EDENUSDT",
+        "latest_close": 1.0,
+        "alert_type": "Parabolic Watch Alert",
+        "opportunity": {
+            "opportunity_score": 31,
+            "classification": "Ignore",
+            "target_bucket": "No clear upside setup",
+            "risk_level": "High",
+            "summary": "High-risk market activity.",
+        },
+        "move_stage_signal": {
+            "move_from_recent_low_pct": 78.86,
+            "stage": "Stage 6 - Parabolic / high risk",
+        },
+        "explosive_mover": {
+            "should_alert": True,
+            "alert_type": "Parabolic Watch Alert",
+            "potential_bucket": "High-risk parabolic watch",
+            "confidence": "Medium",
+            "reason": (
+                "This is not a clean entry signal. It is a high-risk market "
+                "activity alert."
+            ),
+        },
+    }
+    fake_client = SimpleNamespace(
+        get_exchange_info=lambda: {"symbols": []},
+        get_24hr_tickers=lambda: [],
+    )
+
+    monkeypatch.setattr(sys, "argv", ["python -m app.main"])
+    monkeypatch.setattr(app_main, "BinancePublicClient", lambda: fake_client)
+    monkeypatch.setattr(app_main, "get_active_usdt_symbols", lambda exchange_info: ["EDENUSDT"])
+    monkeypatch.setattr(
+        app_main,
+        "select_scan_universe",
+        lambda active_symbols, tickers_24hr, max_priority_symbols=50, max_universe_symbols=150: ["EDENUSDT"],
+    )
+    monkeypatch.setattr(
+        app_main,
+        "scan_symbols",
+        lambda client, symbols, interval="15m", limit=100, max_symbols=50, tickers_24hr=None: [candidate],
+    )
+    monkeypatch.setattr(app_main, "should_send_alert", lambda symbol, score: (True, "ok"))
+    monkeypatch.setattr(app_main, "send_telegram_message", lambda message: sent_messages.append(message) or True)
+    monkeypatch.setattr(
+        app_main,
+        "append_alert_history",
+        lambda result, telegram_sent: {"id": "alert-eden"},
+    )
+    monkeypatch.setattr(app_main, "record_alert", lambda symbol, score: None)
+    monkeypatch.setattr(app_main, "create_paper_trades_from_alerts", lambda candidates, strategy=None: [])
+
+    app_main.main()
+
+    output = capsys.readouterr().out
+
+    assert len(sent_messages) == 1
+    assert "Parabolic Watch Alert" in sent_messages[0]
+    assert "Paper trade skipped: parabolic watch alerts are monitoring-only." in output
+    assert "Paper trades created: 0" in output
 
 
 def test_main_logs_alert_history_when_telegram_send_fails(monkeypatch, capsys) -> None:
@@ -482,8 +551,8 @@ def test_main_logs_alert_history_when_telegram_send_fails(monkeypatch, capsys) -
     monkeypatch.setattr(app_main, "get_active_usdt_symbols", lambda exchange_info: ["BTCUSDT"])
     monkeypatch.setattr(
         app_main,
-        "select_priority_symbols",
-        lambda active_symbols, tickers_24hr, max_symbols=50: ["BTCUSDT"],
+        "select_scan_universe",
+        lambda active_symbols, tickers_24hr, max_priority_symbols=50, max_universe_symbols=150: ["BTCUSDT"],
     )
     monkeypatch.setattr(
         app_main,
@@ -539,8 +608,8 @@ def test_main_does_not_send_alert_message_when_no_candidates(monkeypatch, capsys
     monkeypatch.setattr(app_main, "get_active_usdt_symbols", lambda exchange_info: ["ETHUSDT"])
     monkeypatch.setattr(
         app_main,
-        "select_priority_symbols",
-        lambda active_symbols, tickers_24hr, max_symbols=50: ["ETHUSDT"],
+        "select_scan_universe",
+        lambda active_symbols, tickers_24hr, max_priority_symbols=50, max_universe_symbols=150: ["ETHUSDT"],
     )
     monkeypatch.setattr(
         app_main,
@@ -592,8 +661,8 @@ def test_main_suppresses_alert_candidates_during_cooldown(monkeypatch, capsys) -
     monkeypatch.setattr(app_main, "get_active_usdt_symbols", lambda exchange_info: ["BTCUSDT"])
     monkeypatch.setattr(
         app_main,
-        "select_priority_symbols",
-        lambda active_symbols, tickers_24hr, max_symbols=50: ["BTCUSDT"],
+        "select_scan_universe",
+        lambda active_symbols, tickers_24hr, max_priority_symbols=50, max_universe_symbols=150: ["BTCUSDT"],
     )
     monkeypatch.setattr(
         app_main,

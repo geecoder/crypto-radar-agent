@@ -27,6 +27,12 @@ ALLOWED_CONTINUATION_TARGETS = {
     "+100% speculative momentum watch",
     "Early move watch",
 }
+PAPER_TRADE_ALLOWED_ALERT_TYPES = {
+    "Continuation Alert",
+    "Early Pump Alert",
+    "Active Breakout Alert",
+}
+PARABOLIC_WATCH_ALERT_TYPE = "Parabolic Watch Alert"
 
 
 def build_paper_trade_from_alert(
@@ -44,6 +50,7 @@ def build_paper_trade_from_alert(
         "alert_id": _first_present(result, "alert_id", "id"),
         "strategy_name": strategy.name,
         "symbol": symbol,
+        "alert_type": _get_alert_type(result),
         "opened_at": opened_at,
         "entry_price": result.get("latest_close"),
         "status": "open",
@@ -71,6 +78,14 @@ def should_create_paper_trade(
 ) -> tuple[bool, str]:
     """Return whether an alert candidate qualifies for a simulated trade."""
     strategy = strategy or get_default_paper_trading_strategy()
+    alert_type = _get_alert_type(result)
+
+    if alert_type == PARABOLIC_WATCH_ALERT_TYPE:
+        return False, "Parabolic Watch Alert is not eligible for paper trading."
+
+    if alert_type not in PAPER_TRADE_ALLOWED_ALERT_TYPES:
+        return False, f"{alert_type} is not eligible for paper trading."
+
     opportunity_score = _safe_float(_get_opportunity_value(result, "opportunity_score"))
 
     if opportunity_score < strategy.minimum_opportunity_score:
@@ -440,6 +455,19 @@ def _get_opportunity_value(result: dict, key: str) -> Any:
         return opportunity.get(key)
 
     return result.get(key)
+
+
+def _get_alert_type(result: dict) -> str:
+    """Read the alert type, defaulting old alert payloads to continuation."""
+    if result.get("alert_type") is not None:
+        return str(result.get("alert_type"))
+
+    explosive_mover = result.get("explosive_mover") or {}
+
+    if explosive_mover.get("should_alert"):
+        return str(explosive_mover.get("alert_type", "Explosive Mover Alert"))
+
+    return "Continuation Alert"
 
 
 def _get_continuation_target(result: dict) -> str | None:

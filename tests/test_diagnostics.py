@@ -30,6 +30,24 @@ def _diagnostic_result(score: int = 55) -> dict:
             "target_bucket": "No clear continuation setup",
             "confidence": "Low",
         },
+        "recent_price_changes": {
+            "change_15m_pct": 1,
+            "change_30m_pct": 2,
+            "change_1h_pct": 3,
+            "change_2h_pct": 4,
+            "change_4h_pct": 5,
+            "change_24h_pct": 6,
+        },
+        "volume_acceleration": {
+            "volume_acceleration_1h_ratio": 1.5,
+            "volume_acceleration_2h_ratio": 2,
+            "score": 60,
+        },
+        "explosive_mover": {
+            "alert_type": "No explosive mover alert",
+            "should_alert": False,
+            "reason": "Explosive mover conditions are not strong enough.",
+        },
         "opportunity": {
             "opportunity_score": score,
             "classification": "Weak signal",
@@ -163,14 +181,48 @@ def test_format_diagnostic_report_includes_required_fields_and_reasons() -> None
     assert "Classification: Weak signal" in report
     assert "Target bucket: No clear upside setup" in report
     assert "Continuation target: No clear continuation setup" in report
+    assert "Explosive mover alert type: No explosive mover alert" in report
+    assert "Explosive mover should_alert: false" in report
+    assert "Explosive mover conditions are not strong enough." in report
+    assert "Would trigger Continuation Alert? false" in report
+    assert "Would trigger Early Pump Alert? false" in report
+    assert "Would trigger Active Breakout Alert? false" in report
+    assert "Would trigger Parabolic Watch Alert? false" in report
     assert "Move stage: Stage 5 - Extended move" in report
     assert "Move from recent low %: 25.50%" in report
     assert "Liquidity label: Thin" in report
     assert "Exhaustion risk: High" in report
+    assert "- 15m: 1.00%" in report
+    assert "- 24h: 6.00%" in report
+    assert "- 1h ratio: 1.50x" in report
+    assert "- 2h ratio: 2.00x" in report
     assert "- volume: 20" in report
     assert "- exhaustion_risk: 60" in report
     assert "Rejected: score below alert threshold." in report
     assert "Near miss. Monitor if volume/breakout improves." in report
+
+
+def test_format_diagnostic_report_marks_explosive_mover_as_alert_candidate() -> None:
+    result = _diagnostic_result(score=35)
+    result["explosive_mover"] = {
+        "alert_type": "Parabolic Watch Alert",
+        "should_alert": True,
+        "reason": (
+            "This is not a clean entry signal. It is a high-risk market "
+            "activity alert."
+        ),
+    }
+
+    report = format_diagnostic_report(result, alert_threshold=60)
+
+    assert "Would alert? Yes" in report
+    assert "Explosive mover alert type: Parabolic Watch Alert" in report
+    assert "Explosive mover should_alert: true" in report
+    assert "Would trigger Parabolic Watch Alert? true" in report
+    assert (
+        "This does not qualify as a clean continuation trade, but it "
+        "qualifies as a Parabolic Watch Alert."
+    ) in report
 
 
 def test_format_diagnostic_report_handles_scan_errors() -> None:
