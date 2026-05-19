@@ -22,6 +22,10 @@ from app.analysis.signal_analysis import (
     build_signal_analysis,
     format_signal_analysis,
 )
+from app.analysis.strategy_performance import (
+    build_strategy_performance_report,
+    format_strategy_performance_report,
+)
 from app.binance.client import BinancePublicClient
 from app.binance.market_filter import select_scan_universe
 from app.binance.symbols import get_active_usdt_symbols
@@ -80,6 +84,16 @@ def parse_args() -> argparse.Namespace:
         "--paper-trading-report",
         action="store_true",
         help="Print a simulated paper trading performance report and exit.",
+    )
+    parser.add_argument(
+        "--strategy-performance-report",
+        action="store_true",
+        help="Print a strategy performance comparison report and exit.",
+    )
+    parser.add_argument(
+        "--send-strategy-performance-report",
+        action="store_true",
+        help="Send a strategy performance comparison report to Telegram and exit.",
     )
     parser.add_argument(
         "--diagnose-symbol",
@@ -175,6 +189,25 @@ def main() -> None:
         paper_trades = load_all_paper_trades()
         report = build_paper_trading_report(paper_trades)
         print(format_paper_trading_report(report))
+        return
+
+    if args.strategy_performance_report:
+        paper_trades = load_all_paper_trades()
+        report = build_strategy_performance_report(paper_trades)
+        print(format_strategy_performance_report(report))
+        return
+
+    if args.send_strategy_performance_report:
+        paper_trades = load_all_paper_trades()
+        report = build_strategy_performance_report(paper_trades)
+        message = format_strategy_performance_report(report)
+        message_sent = send_telegram_message(message)
+
+        if message_sent:
+            print("Strategy performance report sent to Telegram.")
+        else:
+            print("Failed to send strategy performance report to Telegram.")
+
         return
 
     if args.diagnose_symbol:
