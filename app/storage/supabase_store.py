@@ -96,6 +96,8 @@ def _ensure_tables(connection) -> None:
                 id TEXT PRIMARY KEY,
                 alert_id TEXT,
                 strategy_name TEXT,
+                alert_type TEXT,
+                trade_plan_type TEXT,
                 symbol TEXT,
                 opened_at TIMESTAMPTZ,
                 closed_at TIMESTAMPTZ,
@@ -129,6 +131,18 @@ def _ensure_tables(connection) -> None:
             """
             ALTER TABLE paper_trades
             ADD COLUMN IF NOT EXISTS strategy_name TEXT
+            """
+        )
+        cursor.execute(
+            """
+            ALTER TABLE paper_trades
+            ADD COLUMN IF NOT EXISTS alert_type TEXT
+            """
+        )
+        cursor.execute(
+            """
+            ALTER TABLE paper_trades
+            ADD COLUMN IF NOT EXISTS trade_plan_type TEXT
             """
         )
         cursor.execute(
@@ -479,6 +493,8 @@ def insert_paper_trade(record: dict) -> None:
                         id,
                         alert_id,
                         strategy_name,
+                        alert_type,
+                        trade_plan_type,
                         symbol,
                         opened_at,
                         closed_at,
@@ -507,7 +523,8 @@ def insert_paper_trade(record: dict) -> None:
                     VALUES (
                         %s, %s, %s, %s, %s, %s, %s, %s, %s,
                         %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                        %s, %s, %s, %s, %s, %s, %s, %s, %s
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                        %s, %s
                     )
                     ON CONFLICT (id) DO NOTHING
                     """,
@@ -515,6 +532,8 @@ def insert_paper_trade(record: dict) -> None:
                         record_id,
                         record.get("alert_id"),
                         record.get("strategy_name"),
+                        record.get("alert_type"),
+                        record.get("trade_plan_type"),
                         record.get("symbol"),
                         record.get("opened_at"),
                         record.get("closed_at"),
@@ -558,6 +577,8 @@ def get_open_paper_trades() -> list[dict]:
                         id,
                         alert_id,
                         strategy_name,
+                        alert_type,
+                        trade_plan_type,
                         symbol,
                         opened_at,
                         closed_at,
@@ -608,6 +629,8 @@ def update_paper_trade(trade_id: str, updates: dict) -> None:
     column_by_key = {
         "alert_id": "alert_id",
         "strategy_name": "strategy_name",
+        "alert_type": "alert_type",
+        "trade_plan_type": "trade_plan_type",
         "symbol": "symbol",
         "opened_at": "opened_at",
         "closed_at": "closed_at",
@@ -717,6 +740,8 @@ def load_paper_trades(limit: int | None = None) -> list[dict]:
                             id,
                             alert_id,
                             strategy_name,
+                            alert_type,
+                            trade_plan_type,
                             symbol,
                             opened_at,
                             closed_at,
@@ -754,6 +779,8 @@ def load_paper_trades(limit: int | None = None) -> list[dict]:
                             id,
                             alert_id,
                             strategy_name,
+                            alert_type,
+                            trade_plan_type,
                             symbol,
                             opened_at,
                             closed_at,
@@ -856,6 +883,8 @@ def _paper_trade_row_to_record(row: dict) -> dict:
         "id": row.get("id"),
         "alert_id": row.get("alert_id"),
         "strategy_name": row.get("strategy_name"),
+        "alert_type": row.get("alert_type"),
+        "trade_plan_type": row.get("trade_plan_type"),
         "symbol": row.get("symbol"),
         "opened_at": _to_iso(row.get("opened_at")),
         "closed_at": _to_iso(row.get("closed_at")),

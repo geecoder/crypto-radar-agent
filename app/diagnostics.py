@@ -70,6 +70,10 @@ def format_diagnostic_report(result: dict, alert_threshold: int = 60) -> str:
     component_scores = opportunity.get("component_scores", {})
     score = _get_opportunity_score(result)
     would_alert = score >= alert_threshold or _is_explosive_alert(result)
+    parabolic_paper_eligible, parabolic_paper_reason = _parabolic_paper_status(
+        result,
+        trade_plan,
+    )
 
     lines = [
         "Missed Mover Diagnostic",
@@ -111,6 +115,15 @@ def format_diagnostic_report(result: dict, alert_threshold: int = 60) -> str:
         (
             "Would trigger Parabolic Watch Alert? "
             f"{_format_bool(_explosive_alert_type(result) == 'Parabolic Watch Alert')}"
+        ),
+        (
+            "Parabolic paper eligible: "
+            f"{_format_bool(parabolic_paper_eligible)}"
+        ),
+        f"Parabolic paper reason: {parabolic_paper_reason}",
+        (
+            "Would create parabolic paper trade? "
+            f"{_format_bool(parabolic_paper_eligible)}"
         ),
         f"Move stage: {move_stage.get('stage', 'Not available')}",
         (
@@ -335,6 +348,28 @@ def _is_explosive_alert(result: dict) -> bool:
 def _explosive_alert_type(result: dict) -> str:
     """Read the explosive mover alert type."""
     return str(result.get("explosive_mover", {}).get("alert_type", ""))
+
+
+def _parabolic_paper_status(result: dict, trade_plan: dict | None) -> tuple[bool, str]:
+    """Return diagnostic parabolic paper eligibility and reason."""
+    if isinstance(trade_plan, dict) and "parabolic_paper_eligible" in trade_plan:
+        return (
+            bool(trade_plan.get("parabolic_paper_eligible")),
+            str(
+                trade_plan.get("parabolic_paper_reason")
+                or trade_plan.get("reason")
+                or "Not available"
+            ),
+        )
+
+    alert_type = result.get("alert_type") or _explosive_alert_type(result)
+
+    if alert_type != "Parabolic Watch Alert":
+        return False, "Not a Parabolic Watch Alert."
+
+    from app.trading.paper_trading import should_create_parabolic_paper_trade
+
+    return should_create_parabolic_paper_trade(result)
 
 
 def _get_opportunity_score(result: dict) -> int:

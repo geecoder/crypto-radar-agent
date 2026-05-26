@@ -341,10 +341,34 @@ def format_alert_message(alert_candidates: list[dict]) -> str:
             )
 
             if alert_type == "Parabolic Watch Alert":
-                lines.append(
-                    "High risk. This is a market activity alert, not a clean entry signal. "
-                    "Avoid chasing vertical candles. Watch for pullback/retest."
+                parabolic_paper_eligible = bool(
+                    trade_plan.get("parabolic_paper_eligible")
                 )
+                parabolic_paper_reason = str(
+                    trade_plan.get("parabolic_paper_reason")
+                    or trade_plan.get("reason")
+                    or "Not available"
+                )
+                lines.extend(
+                    [
+                        (
+                            "High risk. This is not a clean entry signal. "
+                            "Avoid chasing vertical candles. Watch for pullback/retest."
+                        ),
+                        (
+                            "Parabolic paper eligible: "
+                            f"{'Yes' if parabolic_paper_eligible else 'No'}"
+                        ),
+                    ]
+                )
+
+                if parabolic_paper_eligible:
+                    lines.append("High-risk paper simulation may be created.")
+                else:
+                    lines.append(
+                        "Paper trade skipped: "
+                        f"{escape(parabolic_paper_reason)}"
+                    )
 
             lines.extend(_format_trade_plan_lines(trade_plan))
             continue

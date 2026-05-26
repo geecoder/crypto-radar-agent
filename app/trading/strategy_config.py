@@ -75,6 +75,24 @@ def get_aggressive_paper_trading_strategy() -> PaperTradingStrategy:
     )
 
 
+def get_parabolic_paper_strategy() -> PaperTradingStrategy:
+    """Return the high-risk parabolic continuation paper-only strategy."""
+    return PaperTradingStrategy(
+        name="parabolic_continuation_paper",
+        minimum_opportunity_score=25,
+        min_move_from_recent_low_pct=50,
+        max_move_from_recent_low_pct=150,
+        allow_thin_liquidity=True,
+        allow_high_exhaustion=False,
+        stop_loss_pct=-8,
+        take_profit_1_pct=12,
+        take_profit_2_pct=25,
+        take_profit_3_pct=50,
+        max_hold_hours=24,
+        simulated_position_size=25,
+    )
+
+
 def get_strategy_by_name(name: str | None) -> PaperTradingStrategy:
     """Return a paper trading strategy by short CLI name."""
     if name is None:
@@ -90,5 +108,8 @@ def get_strategy_by_name(name: str | None) -> PaperTradingStrategy:
 
     if normalized_name == "aggressive":
         return get_aggressive_paper_trading_strategy()
+
+    if normalized_name == "parabolic":
+        return get_parabolic_paper_strategy()
 
     return get_default_paper_trading_strategy()

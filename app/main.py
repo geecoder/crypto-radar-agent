@@ -105,7 +105,7 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help=(
             "Paper trading strategy for newly created simulated trades "
-            "(default, conservative, aggressive)."
+            "(default, conservative, aggressive, parabolic)."
         ),
     )
     return parser.parse_args()
@@ -297,11 +297,24 @@ def main() -> None:
             paper_trade_candidates,
             strategy=paper_strategy,
         )
-        if any(
-            candidate.get("alert_type") == "Parabolic Watch Alert"
-            for candidate in paper_trade_candidates
-        ):
-            print("Paper trade skipped: parabolic watch alerts are monitoring-only.")
+        for candidate in paper_trade_candidates:
+            if candidate.get("alert_type") != "Parabolic Watch Alert":
+                continue
+
+            trade_plan = candidate.get("trade_plan", {})
+            reason = (
+                trade_plan.get("parabolic_paper_reason")
+                or trade_plan.get("reason")
+                or "Not available"
+            )
+
+            if trade_plan.get("parabolic_paper_eligible"):
+                print(
+                    "Parabolic paper trade eligible: "
+                    "high-risk paper simulation may be created."
+                )
+            else:
+                print(f"Paper trade skipped: {reason}")
         print(f"Paper trades created: {len(paper_trades)}")
         return
 

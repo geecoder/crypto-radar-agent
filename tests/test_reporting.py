@@ -186,6 +186,8 @@ def test_format_alert_message_includes_explosive_mover_context() -> None:
             "entry signal."
         ),
         "should_paper_trade": False,
+        "parabolic_paper_eligible": False,
+        "parabolic_paper_reason": "24h change is below 40%.",
     }
 
     message = format_alert_message([result])
@@ -198,9 +200,11 @@ def test_format_alert_message_includes_explosive_mover_context() -> None:
     assert "Potential bucket: High-risk parabolic watch" in message
     assert "Confidence: High" in message
     assert (
-        "High risk. This is a market activity alert, not a clean entry signal. "
+        "High risk. This is not a clean entry signal. "
         "Avoid chasing vertical candles. Watch for pullback/retest."
     ) in message
+    assert "Parabolic paper eligible: No" in message
+    assert "Paper trade skipped: 24h change is below 40%." in message
     assert "No clean trade plan generated." in message
     assert "Monitoring only." in message
     assert "Paper trade skipped." in message

@@ -522,7 +522,7 @@ def test_main_skips_paper_trade_for_parabolic_watch_alert(monkeypatch, capsys) -
 
     assert len(sent_messages) == 1
     assert "Parabolic Watch Alert" in sent_messages[0]
-    assert "Paper trade skipped: parabolic watch alerts are monitoring-only." in output
+    assert "Paper trade skipped:" in output
     assert "Paper trades created: 0" in output
 
 

@@ -197,6 +197,9 @@ def test_format_diagnostic_report_includes_required_fields_and_reasons() -> None
     assert "Would trigger Early Pump Alert? false" in report
     assert "Would trigger Active Breakout Alert? false" in report
     assert "Would trigger Parabolic Watch Alert? false" in report
+    assert "Parabolic paper eligible: false" in report
+    assert "Parabolic paper reason: Not a Parabolic Watch Alert." in report
+    assert "Would create parabolic paper trade? false" in report
     assert "Move stage: Stage 5 - Extended move" in report
     assert "Move from recent low %: 25.50%" in report
     assert "Liquidity label: Thin" in report
@@ -238,7 +241,9 @@ def test_format_diagnostic_report_marks_explosive_mover_as_alert_candidate() -> 
             "entry signal."
         ),
         "should_paper_trade": False,
-        "reason": "Parabolic watch alerts are monitoring-only.",
+        "parabolic_paper_eligible": False,
+        "parabolic_paper_reason": "24h change is below 40%.",
+        "reason": "24h change is below 40%.",
     }
 
     report = format_diagnostic_report(result, alert_threshold=60)
@@ -247,6 +252,9 @@ def test_format_diagnostic_report_marks_explosive_mover_as_alert_candidate() -> 
     assert "Explosive mover alert type: Parabolic Watch Alert" in report
     assert "Explosive mover should_alert: true" in report
     assert "Would trigger Parabolic Watch Alert? true" in report
+    assert "Parabolic paper eligible: false" in report
+    assert "Parabolic paper reason: 24h change is below 40%." in report
+    assert "Would create parabolic paper trade? false" in report
     assert "- Type: parabolic_watch_only" in report
     assert "- No clean trade plan generated." in report
     assert "- Monitoring only." in report

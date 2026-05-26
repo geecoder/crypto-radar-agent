@@ -4,6 +4,11 @@ This module only produces monitoring and paper-trading guidance. It never
 places real orders and never touches private exchange APIs.
 """
 
+from app.trading.strategy_config import (
+    PaperTradingStrategy,
+    get_parabolic_paper_strategy,
+)
+
 DEFAULT_MAX_HOLD_HOURS = 48
 PAPER_TRADE_BLOCKED_LIQUIDITY_LABELS = {"thin", "very thin"}
 
@@ -80,36 +85,62 @@ def generate_trade_plan(result: dict) -> dict:
         )
 
     if alert_type == "Parabolic Watch Alert":
-        return {
-            **_base_plan(symbol, alert_type, latest_close),
-            "trade_plan_type": "parabolic_watch_only",
-            "recommended_action": "Watch only; do not chase",
-            "entry_approach": (
-                "Wait for pullback, consolidation, or retest. "
-                "No clean entry currently."
-            ),
-            "entry_zone_low": None,
-            "entry_zone_high": None,
-            "stop_loss_price": None,
-            "stop_loss_pct": None,
-            "take_profit_1_price": None,
-            "take_profit_1_pct": None,
-            "take_profit_2_price": None,
-            "take_profit_2_pct": None,
-            "take_profit_3_price": None,
-            "take_profit_3_pct": None,
-            "max_hold_hours": None,
-            "invalidation_rule": (
-                "No clean trade plan generated. Monitoring only until a "
-                "pullback, consolidation, or retest forms."
-            ),
-            "risk_note": (
-                "Very high risk. This is a market activity alert, not a "
-                "clean entry signal."
-            ),
-            "should_paper_trade": False,
-            "reason": "Parabolic watch alerts are monitoring-only.",
-        }
+        should_paper_trade, reason, strategy = _parabolic_paper_trade_eligibility(
+            result
+        )
+
+        if should_paper_trade:
+            return {
+                **_base_plan(symbol, alert_type, latest_close),
+                "trade_plan_type": "parabolic_high_risk_paper",
+                "recommended_action": "High-risk paper simulation only",
+                "entry_approach": (
+                    "Only simulate if momentum re-accelerates or "
+                    "pullback/retest holds"
+                ),
+                "entry_zone_low": round_price(latest_close),
+                "entry_zone_high": round_price(latest_close),
+                "stop_loss_price": _price_at_pct(
+                    latest_close,
+                    strategy.stop_loss_pct,
+                ),
+                "stop_loss_pct": strategy.stop_loss_pct,
+                "take_profit_1_price": _price_at_pct(
+                    latest_close,
+                    strategy.take_profit_1_pct,
+                ),
+                "take_profit_1_pct": strategy.take_profit_1_pct,
+                "take_profit_2_price": _price_at_pct(
+                    latest_close,
+                    strategy.take_profit_2_pct,
+                ),
+                "take_profit_2_pct": strategy.take_profit_2_pct,
+                "take_profit_3_price": _price_at_pct(
+                    latest_close,
+                    strategy.take_profit_3_pct,
+                ),
+                "take_profit_3_pct": strategy.take_profit_3_pct,
+                "max_hold_hours": strategy.max_hold_hours,
+                "invalidation_rule": (
+                    "Paper simulation invalidates if momentum fails, retest "
+                    "breaks, or the planned stop is hit."
+                ),
+                "risk_note": (
+                    "High risk. This is not a clean entry signal. Paper "
+                    "simulation only; no live trading."
+                ),
+                "should_paper_trade": True,
+                "parabolic_paper_eligible": True,
+                "parabolic_paper_reason": reason,
+                "reason": reason,
+            }
+
+        return _build_parabolic_monitoring_plan(
+            symbol=symbol,
+            alert_type=alert_type,
+            latest_close=latest_close,
+            reason=reason,
+        )
 
     return {
         **_base_plan(symbol, alert_type, latest_close),
@@ -194,6 +225,56 @@ def _base_plan(symbol: str, alert_type: str, latest_close: float) -> dict:
         "alert_type": alert_type,
         "latest_close": round_price(latest_close),
     }
+
+
+def _build_parabolic_monitoring_plan(
+    symbol: str,
+    alert_type: str,
+    latest_close: float,
+    reason: str,
+) -> dict:
+    """Build a monitoring-only plan for parabolic alerts that fail paper rules."""
+    return {
+        **_base_plan(symbol, alert_type, latest_close),
+        "trade_plan_type": "parabolic_watch_only",
+        "recommended_action": "Watch only; do not chase",
+        "entry_approach": (
+            "Wait for pullback, consolidation, or retest. "
+            "No clean entry currently."
+        ),
+        "entry_zone_low": None,
+        "entry_zone_high": None,
+        "stop_loss_price": None,
+        "stop_loss_pct": None,
+        "take_profit_1_price": None,
+        "take_profit_1_pct": None,
+        "take_profit_2_price": None,
+        "take_profit_2_pct": None,
+        "take_profit_3_price": None,
+        "take_profit_3_pct": None,
+        "max_hold_hours": None,
+        "invalidation_rule": (
+            "No clean trade plan generated. Monitoring only until a "
+            "pullback, consolidation, or retest forms."
+        ),
+        "risk_note": "High risk. This is not a clean entry signal.",
+        "should_paper_trade": False,
+        "parabolic_paper_eligible": False,
+        "parabolic_paper_reason": reason,
+        "reason": reason,
+    }
+
+
+def _parabolic_paper_trade_eligibility(
+    result: dict,
+) -> tuple[bool, str, PaperTradingStrategy]:
+    """Run the parabolic paper-only eligibility rules without live trading."""
+    from app.trading.paper_trading import should_create_parabolic_paper_trade
+
+    strategy = get_parabolic_paper_strategy()
+    should_create, reason = should_create_parabolic_paper_trade(result, strategy)
+
+    return should_create, reason, strategy
 
 
 def _get_alert_type(result: dict) -> str:

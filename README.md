@@ -78,3 +78,14 @@ Run tests:
 ```powershell
 python -m pytest
 ```
+
+## Supabase Paper Trade Columns
+
+The app auto-adds these columns when Supabase storage initializes. If you need
+to run the migration manually, use:
+
+```sql
+alter table paper_trades add column if not exists alert_type text;
+alter table paper_trades add column if not exists trade_plan_type text;
+alter table paper_trades add column if not exists strategy_name text;
+```

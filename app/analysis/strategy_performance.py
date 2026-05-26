@@ -174,7 +174,7 @@ def generate_tuning_recommendations(report: dict) -> list[str]:
 
     if parabolic_alerts and parabolic_alerts.get("count", 0) > 0:
         recommendations.append(
-            "Parabolic Watch Alerts should remain monitoring-only and should not create paper trades."
+            "Parabolic Watch Alerts are high-risk paper-only experiments; keep them separate from clean continuation strategies."
         )
 
     score_bands = report.get("by_score_band", {})

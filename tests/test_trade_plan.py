@@ -114,10 +114,48 @@ def test_generate_trade_plan_for_parabolic_watch_is_monitoring_only() -> None:
     assert plan["take_profit_3_price"] is None
     assert plan["max_hold_hours"] is None
     assert plan["should_paper_trade"] is False
+    assert plan["parabolic_paper_eligible"] is False
+    assert "between 50% and 150%" in plan["parabolic_paper_reason"]
     assert (
         plan["risk_note"]
-        == "Very high risk. This is a market activity alert, not a clean entry signal."
+        == "High risk. This is not a clean entry signal."
     )
+
+
+def test_generate_trade_plan_for_parabolic_watch_when_paper_eligible() -> None:
+    result = _base_result("Parabolic Watch Alert")
+    result["move_stage_signal"]["move_from_recent_low_pct"] = 90
+    result["liquidity_signal"] = {
+        "score": 60,
+        "label": "Good",
+        "quote_volume": 20_000_000,
+    }
+    result["recent_price_changes"] = {
+        "change_1h_pct": 1,
+        "change_2h_pct": 4,
+        "change_4h_pct": 11,
+        "change_24h_pct": 75,
+    }
+    result["volume_acceleration"] = {
+        "volume_acceleration_2h_ratio": 1.4,
+    }
+
+    plan = generate_trade_plan(result)
+
+    assert plan["trade_plan_type"] == "parabolic_high_risk_paper"
+    assert plan["recommended_action"] == "High-risk paper simulation only"
+    assert (
+        plan["entry_approach"]
+        == "Only simulate if momentum re-accelerates or pullback/retest holds"
+    )
+    assert plan["stop_loss_pct"] == -8
+    assert plan["take_profit_1_pct"] == 12
+    assert plan["take_profit_2_pct"] == 25
+    assert plan["take_profit_3_pct"] == 50
+    assert plan["max_hold_hours"] == 24
+    assert plan["should_paper_trade"] is True
+    assert plan["parabolic_paper_eligible"] is True
+    assert plan["parabolic_paper_reason"] == "Parabolic paper trade eligible."
 
 
 def test_generate_trade_plan_rejects_thin_liquidity_for_paper_trade() -> None:

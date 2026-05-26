@@ -224,7 +224,7 @@ def test_tuning_recommendations_for_risky_groups_and_thresholds() -> None:
         in recommendations
     )
     assert (
-        "Parabolic Watch Alerts should remain monitoring-only and should not create paper trades."
+        "Parabolic Watch Alerts are high-risk paper-only experiments; keep them separate from clean continuation strategies."
         in recommendations
     )
     assert "Consider raising alert/paper trade threshold from 65 to 70." in recommendations

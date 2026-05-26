@@ -17,6 +17,7 @@ from app.storage import supabase_store
 from app.trading.strategy_config import (
     PaperTradingStrategy,
     get_default_paper_trading_strategy,
+    get_parabolic_paper_strategy,
 )
 
 PAPER_TRADES_FILE = "data/paper_trades.json"
@@ -33,6 +34,9 @@ PAPER_TRADE_ALLOWED_ALERT_TYPES = {
     "Active Breakout Alert",
 }
 PARABOLIC_WATCH_ALERT_TYPE = "Parabolic Watch Alert"
+PARABOLIC_TRADE_PLAN_TYPE = "parabolic_high_risk_paper"
+PARABOLIC_MIN_24H_CHANGE_PCT = 40
+PARABOLIC_MIN_QUOTE_VOLUME = 5_000_000
 
 
 def build_paper_trade_from_alert(
@@ -52,6 +56,7 @@ def build_paper_trade_from_alert(
         "strategy_name": strategy.name,
         "symbol": symbol,
         "alert_type": _get_alert_type(result),
+        "trade_plan_type": _get_trade_plan_type(result, trade_plan),
         "opened_at": opened_at,
         "entry_price": result.get("latest_close"),
         "status": "open",
@@ -155,6 +160,79 @@ def should_create_paper_trade(
     return True, "Paper trade eligible."
 
 
+def should_create_parabolic_paper_trade(
+    result: dict,
+    strategy: PaperTradingStrategy | None = None,
+) -> tuple[bool, str]:
+    """Return whether a Parabolic Watch Alert qualifies for paper-only testing."""
+    strategy = strategy or get_parabolic_paper_strategy()
+    alert_type = _get_alert_type(result)
+
+    if alert_type != PARABOLIC_WATCH_ALERT_TYPE:
+        return False, f"{alert_type} is not a Parabolic Watch Alert."
+
+    opportunity_score = _safe_float(
+        _get_opportunity_value(result, "opportunity_score"),
+        default=None,
+    )
+
+    if (
+        opportunity_score is None
+        or opportunity_score < strategy.minimum_opportunity_score
+    ):
+        return (
+            False,
+            f"Opportunity score is below {strategy.minimum_opportunity_score}.",
+        )
+
+    move_pct = _safe_float(_get_move_from_recent_low_pct(result), default=None)
+
+    if (
+        move_pct is None
+        or move_pct < strategy.min_move_from_recent_low_pct
+        or move_pct > strategy.max_move_from_recent_low_pct
+    ):
+        return (
+            False,
+            "Move from recent low must be between "
+            f"{strategy.min_move_from_recent_low_pct:g}% and "
+            f"{strategy.max_move_from_recent_low_pct:g}%.",
+        )
+
+    liquidity_ok, liquidity_reason = _parabolic_liquidity_check(result)
+
+    if not liquidity_ok:
+        return False, liquidity_reason
+
+    exhaustion_level = str(_get_exhaustion_risk_level(result) or "").strip()
+
+    if not strategy.allow_high_exhaustion and exhaustion_level.lower() == "high":
+        return False, "Exhaustion risk is High."
+
+    change_24h = _safe_float(
+        _get_recent_price_change(result, "change_24h_pct"),
+        default=None,
+    )
+
+    if change_24h is None or change_24h < PARABOLIC_MIN_24H_CHANGE_PCT:
+        return (
+            False,
+            f"24h change is below {PARABOLIC_MIN_24H_CHANGE_PCT:g}%.",
+        )
+
+    if not _has_parabolic_reacceleration(result):
+        return (
+            False,
+            (
+                "No parabolic re-acceleration trigger: needs 2h volume "
+                "acceleration >= 2x, 1h change >= 2%, 2h change >= 5%, "
+                "or 4h change >= 10%."
+            ),
+        )
+
+    return True, "Parabolic paper trade eligible."
+
+
 def create_paper_trades_from_alerts(
     alert_candidates: list[dict],
     strategy: PaperTradingStrategy | None = None,
@@ -164,6 +242,25 @@ def create_paper_trades_from_alerts(
     created_trades = []
 
     for candidate in alert_candidates:
+        alert_type = _get_alert_type(candidate)
+
+        if alert_type == PARABOLIC_WATCH_ALERT_TYPE:
+            parabolic_strategy = get_parabolic_paper_strategy()
+            should_create, reason = should_create_parabolic_paper_trade(
+                candidate,
+                parabolic_strategy,
+            )
+
+            if not should_create:
+                continue
+
+            candidate = _with_parabolic_trade_plan(candidate, parabolic_strategy, reason)
+            trade = build_paper_trade_from_alert(candidate, parabolic_strategy)
+            _insert_paper_trade(trade)
+            _insert_paper_trade_event(_build_trade_event(trade, "opened"))
+            created_trades.append(trade)
+            continue
+
         should_create, _reason = should_create_paper_trade(candidate, strategy)
 
         if not should_create:
@@ -514,6 +611,54 @@ def _trade_plan_value(trade_plan: dict, key: str, fallback: Any) -> Any:
     return fallback
 
 
+def _get_trade_plan_type(result: dict, trade_plan: dict) -> str | None:
+    """Read or infer the trade-plan type stored with paper trades."""
+    if trade_plan.get("trade_plan_type"):
+        return str(trade_plan.get("trade_plan_type"))
+
+    alert_type = _get_alert_type(result)
+
+    if alert_type == PARABOLIC_WATCH_ALERT_TYPE:
+        return PARABOLIC_TRADE_PLAN_TYPE
+
+    if alert_type == "Early Pump Alert":
+        return "early_momentum_continuation"
+
+    if alert_type == "Active Breakout Alert":
+        return "active_breakout_continuation"
+
+    if alert_type == "Continuation Alert":
+        return "standard_continuation"
+
+    return None
+
+
+def _with_parabolic_trade_plan(
+    result: dict,
+    strategy: PaperTradingStrategy,
+    reason: str,
+) -> dict:
+    """Return a result copy with parabolic paper trade metadata attached."""
+    trade_plan = {
+        **_get_trade_plan(result),
+        "trade_plan_type": PARABOLIC_TRADE_PLAN_TYPE,
+        "stop_loss_pct": strategy.stop_loss_pct,
+        "take_profit_1_pct": strategy.take_profit_1_pct,
+        "take_profit_2_pct": strategy.take_profit_2_pct,
+        "take_profit_3_pct": strategy.take_profit_3_pct,
+        "max_hold_hours": strategy.max_hold_hours,
+        "should_paper_trade": True,
+        "parabolic_paper_eligible": True,
+        "parabolic_paper_reason": reason,
+        "reason": reason,
+    }
+
+    return {
+        **result,
+        "trade_plan": trade_plan,
+    }
+
+
 def _get_continuation_target(result: dict) -> str | None:
     """Read the continuation target bucket from a scan result."""
     continuation_target = result.get("continuation_target")
@@ -552,6 +697,35 @@ def _get_liquidity_label(result: dict) -> Any:
     return _first_present(result, "liquidity_label") or liquidity_signal.get("label")
 
 
+def _get_liquidity_score(result: dict) -> Any:
+    """Read the liquidity score from nested or flattened alert data."""
+    liquidity_signal = result.get("liquidity_signal") or {}
+    flattened_score = _first_present(result, "liquidity_score")
+
+    if flattened_score is not None:
+        return flattened_score
+
+    return liquidity_signal.get("score")
+
+
+def _get_quote_volume(result: dict) -> Any:
+    """Read 24h quote volume from common result shapes."""
+    liquidity_signal = result.get("liquidity_signal") or {}
+    ticker_24hr = result.get("ticker_24hr") or {}
+    flattened_quote_volume = _first_present(result, "quote_volume", "quoteVolume")
+
+    if flattened_quote_volume is not None:
+        return flattened_quote_volume
+
+    if liquidity_signal.get("quote_volume") is not None:
+        return liquidity_signal.get("quote_volume")
+
+    if liquidity_signal.get("quoteVolume") is not None:
+        return liquidity_signal.get("quoteVolume")
+
+    return ticker_24hr.get("quoteVolume")
+
+
 def _get_exhaustion_risk_level(result: dict) -> Any:
     """Read exhaustion risk from nested or flattened alert data."""
     exhaustion_signal = result.get("exhaustion_signal") or {}
@@ -559,6 +733,77 @@ def _get_exhaustion_risk_level(result: dict) -> Any:
     return (
         _first_present(result, "exhaustion_risk_level")
         or exhaustion_signal.get("risk_level")
+    )
+
+
+def _get_recent_price_change(result: dict, key: str) -> Any:
+    """Read recent price change values from nested or flattened result data."""
+    recent_changes = result.get("recent_price_changes") or {}
+    flattened_change = _first_present(result, key)
+
+    if flattened_change is not None:
+        return flattened_change
+
+    return recent_changes.get(key)
+
+
+def _get_volume_acceleration_ratio(result: dict, key: str) -> Any:
+    """Read volume acceleration ratios from nested or flattened result data."""
+    volume_acceleration = result.get("volume_acceleration") or {}
+    flattened_ratio = _first_present(result, key)
+
+    if flattened_ratio is not None:
+        return flattened_ratio
+
+    return volume_acceleration.get(key)
+
+
+def _parabolic_liquidity_check(result: dict) -> tuple[bool, str]:
+    """Return whether liquidity is acceptable for parabolic paper testing."""
+    liquidity_label = str(_get_liquidity_label(result) or "").strip().lower()
+    liquidity_score = _safe_float(_get_liquidity_score(result), default=None)
+    quote_volume = _safe_float(_get_quote_volume(result), default=0) or 0
+
+    if liquidity_label == "very thin":
+        return False, "Liquidity is Very thin."
+
+    if liquidity_label == "thin":
+        if quote_volume >= PARABOLIC_MIN_QUOTE_VOLUME:
+            return True, "Thin liquidity allowed with sufficient quote volume."
+
+        return (
+            False,
+            (
+                "Thin liquidity requires 24h quote volume of at least "
+                f"{PARABOLIC_MIN_QUOTE_VOLUME:,.0f}."
+            ),
+        )
+
+    if liquidity_score is not None and liquidity_score >= 40:
+        return True, "Liquidity score is acceptable."
+
+    if liquidity_label in {"good", "strong", "excellent"}:
+        return True, "Liquidity label is acceptable."
+
+    return False, "Liquidity score is below 40."
+
+
+def _has_parabolic_reacceleration(result: dict) -> bool:
+    """Return whether short-term price or volume confirms re-acceleration."""
+    volume_acceleration_2h = _safe_float(
+        _get_volume_acceleration_ratio(result, "volume_acceleration_2h_ratio")
+    )
+    change_1h = _safe_float(_get_recent_price_change(result, "change_1h_pct"))
+    change_2h = _safe_float(_get_recent_price_change(result, "change_2h_pct"))
+    change_4h = _safe_float(_get_recent_price_change(result, "change_4h_pct"))
+
+    return any(
+        [
+            volume_acceleration_2h >= 2,
+            change_1h >= 2,
+            change_2h >= 5,
+            change_4h >= 10,
+        ]
     )
 
 
