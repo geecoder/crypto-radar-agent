@@ -23,9 +23,10 @@ from app.trading.trade_plan import generate_trade_plan
 SCAN_DELAY_SECONDS = 0.1
 CONTINUATION_ALERT_TYPE = "Continuation Alert"
 EXPLOSIVE_ALERT_PRIORITIES = {
-    "Parabolic Watch Alert": 95,
+    "Early Pump Alert": 95,
     "Active Breakout Alert": 90,
-    "Early Pump Alert": 80,
+    "Speculative Early Runner Alert": 85,
+    "Parabolic Watch Alert": 80,
 }
 
 

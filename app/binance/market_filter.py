@@ -227,8 +227,20 @@ def select_scan_universe(
         if item["quote_volume"] >= 5_000_000
         and item["price_change_percent"] >= 5
     ]
+    speculative_early_runners = [
+        item["symbol"]
+        for item in eligible_tickers
+        if item["quote_volume"] >= 1_000_000
+        and item["price_change_percent"] >= 5
+    ]
 
     return _dedupe_preserve_order(
-        priority_symbols + top_gainers + high_movers + liquid_movers,
+        (
+            priority_symbols
+            + top_gainers
+            + high_movers
+            + liquid_movers
+            + speculative_early_runners
+        ),
         max_symbols=max_universe_symbols,
     )

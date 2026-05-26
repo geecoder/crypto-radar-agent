@@ -55,6 +55,7 @@ def _is_explosive_alert_type(alert_type: str) -> bool:
     return alert_type in {
         "Early Pump Alert",
         "Active Breakout Alert",
+        "Speculative Early Runner Alert",
         "Parabolic Watch Alert",
     }
 
@@ -368,6 +369,37 @@ def format_alert_message(alert_candidates: list[dict]) -> str:
                     lines.append(
                         "Paper trade skipped: "
                         f"{escape(parabolic_paper_reason)}"
+                    )
+
+            if alert_type == "Speculative Early Runner Alert":
+                speculative_paper_eligible = bool(
+                    trade_plan.get("speculative_paper_eligible")
+                    or trade_plan.get("should_paper_trade")
+                )
+                speculative_paper_reason = str(
+                    trade_plan.get("speculative_paper_reason")
+                    or trade_plan.get("reason")
+                    or "Not available"
+                )
+                lines.extend(
+                    [
+                        (
+                            "High risk. Thin-liquidity early runner. This is "
+                            "not a clean continuation setup."
+                        ),
+                        (
+                            "Paper eligibility: "
+                            f"{'Yes' if speculative_paper_eligible else 'No'}"
+                        ),
+                    ]
+                )
+
+                if speculative_paper_eligible:
+                    lines.append("Small high-risk paper simulation may be created.")
+                else:
+                    lines.append(
+                        "Paper trade skipped: "
+                        f"{escape(speculative_paper_reason)}"
                     )
 
             lines.extend(_format_trade_plan_lines(trade_plan))

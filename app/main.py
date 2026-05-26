@@ -105,7 +105,7 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help=(
             "Paper trading strategy for newly created simulated trades "
-            "(default, conservative, aggressive, parabolic)."
+            "(default, conservative, aggressive, parabolic, speculative)."
         ),
     )
     return parser.parse_args()
@@ -298,6 +298,24 @@ def main() -> None:
             strategy=paper_strategy,
         )
         for candidate in paper_trade_candidates:
+            if candidate.get("alert_type") == "Speculative Early Runner Alert":
+                trade_plan = candidate.get("trade_plan", {})
+                reason = (
+                    trade_plan.get("speculative_paper_reason")
+                    or trade_plan.get("reason")
+                    or "Not available"
+                )
+
+                if trade_plan.get("speculative_paper_eligible"):
+                    print(
+                        "Speculative early runner paper trade eligible: "
+                        "small high-risk paper simulation may be created."
+                    )
+                else:
+                    print(f"Paper trade skipped: {reason}")
+
+                continue
+
             if candidate.get("alert_type") != "Parabolic Watch Alert":
                 continue
 

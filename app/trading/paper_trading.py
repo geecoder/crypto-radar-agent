@@ -18,6 +18,7 @@ from app.trading.strategy_config import (
     PaperTradingStrategy,
     get_default_paper_trading_strategy,
     get_parabolic_paper_strategy,
+    get_speculative_early_runner_strategy,
 )
 
 PAPER_TRADES_FILE = "data/paper_trades.json"
@@ -34,6 +35,8 @@ PAPER_TRADE_ALLOWED_ALERT_TYPES = {
     "Active Breakout Alert",
 }
 PARABOLIC_WATCH_ALERT_TYPE = "Parabolic Watch Alert"
+SPECULATIVE_EARLY_RUNNER_ALERT_TYPE = "Speculative Early Runner Alert"
+SPECULATIVE_EARLY_RUNNER_TRADE_PLAN_TYPE = "speculative_early_runner"
 PARABOLIC_TRADE_PLAN_TYPE = "parabolic_high_risk_paper"
 PARABOLIC_MIN_24H_CHANGE_PCT = 40
 PARABOLIC_MIN_QUOTE_VOLUME = 5_000_000
@@ -256,6 +259,19 @@ def create_paper_trades_from_alerts(
 
             candidate = _with_parabolic_trade_plan(candidate, parabolic_strategy, reason)
             trade = build_paper_trade_from_alert(candidate, parabolic_strategy)
+            _insert_paper_trade(trade)
+            _insert_paper_trade_event(_build_trade_event(trade, "opened"))
+            created_trades.append(trade)
+            continue
+
+        if alert_type == SPECULATIVE_EARLY_RUNNER_ALERT_TYPE:
+            trade_plan = _get_trade_plan(candidate)
+
+            if not trade_plan.get("should_paper_trade", False):
+                continue
+
+            speculative_strategy = get_speculative_early_runner_strategy()
+            trade = build_paper_trade_from_alert(candidate, speculative_strategy)
             _insert_paper_trade(trade)
             _insert_paper_trade_event(_build_trade_event(trade, "opened"))
             created_trades.append(trade)
@@ -620,6 +636,9 @@ def _get_trade_plan_type(result: dict, trade_plan: dict) -> str | None:
 
     if alert_type == PARABOLIC_WATCH_ALERT_TYPE:
         return PARABOLIC_TRADE_PLAN_TYPE
+
+    if alert_type == SPECULATIVE_EARLY_RUNNER_ALERT_TYPE:
+        return SPECULATIVE_EARLY_RUNNER_TRADE_PLAN_TYPE
 
     if alert_type == "Early Pump Alert":
         return "early_momentum_continuation"

@@ -66,8 +66,15 @@ def classify_explosive_mover(
     change_2h = _safe_float(recent_changes.get("change_2h_pct"))
     change_4h = _safe_float(recent_changes.get("change_4h_pct"))
     change_24h = _safe_float(recent_changes.get("change_24h_pct"))
+    volume_acceleration_1h = _safe_float(
+        volume_acceleration.get("volume_acceleration_1h_ratio")
+    )
+    volume_acceleration_2h = _safe_float(
+        volume_acceleration.get("volume_acceleration_2h_ratio")
+    )
     volume_score = _safe_score(volume_acceleration)
     liquidity_score = _safe_score(liquidity_signal)
+    liquidity_label = str(liquidity_signal.get("label", ""))
     trend_score = _safe_score(trend_signal)
     volatility_score = _safe_score(volatility_signal)
     breakout_score = _safe_score(breakout_signal)
@@ -79,6 +86,8 @@ def classify_explosive_mover(
         "change_4h_pct": round(change_4h, 2),
         "change_24h_pct": round(change_24h, 2),
         "volume_acceleration": volume_score,
+        "volume_acceleration_1h_ratio": round(volume_acceleration_1h, 2),
+        "volume_acceleration_2h_ratio": round(volume_acceleration_2h, 2),
         "liquidity": liquidity_score,
         "exhaustion_risk": _safe_risk_score(exhaustion_signal),
         "breakout": breakout_score,
@@ -86,17 +95,24 @@ def classify_explosive_mover(
         "volatility": volatility_score,
     }
 
-    if (move_pct > 50 or change_4h >= 30 or change_24h >= 50) and liquidity_score >= 40:
-        confidence = "High" if volume_score >= 80 and liquidity_score >= 60 else "Medium"
+    if (
+        move_pct >= 3
+        and move_pct <= 10
+        and (change_1h >= 3 or change_2h >= 5)
+        and volume_score >= 40
+        and liquidity_score >= 40
+        and exhaustion_level != "High"
+        and trend_score >= 60
+    ):
         return _classification(
-            alert_type="Parabolic Watch Alert",
+            alert_type="Early Pump Alert",
             should_alert=True,
-            risk_level="Very High",
-            potential_bucket="High-risk parabolic watch",
-            confidence=confidence,
+            risk_level="Medium",
+            potential_bucket="+20% early continuation watch",
+            confidence="High" if volume_score >= 60 and liquidity_score >= 60 else "Medium",
             reason=(
-                "This is not a clean entry signal. It is a high-risk market "
-                "activity alert."
+                "Early pump conditions are present with rising price, "
+                "accelerating volume, acceptable liquidity, and supportive trend."
             ),
             component_scores=component_scores,
         )
@@ -124,23 +140,50 @@ def classify_explosive_mover(
         )
 
     if (
-        move_pct >= 3
-        and move_pct <= 10
-        and (change_1h >= 3 or change_2h >= 5)
-        and volume_score >= 40
-        and liquidity_score >= 40
+        move_pct >= 5
+        and move_pct <= 20
+        and (change_1h >= 2 or change_2h >= 4 or change_4h >= 6)
+        and change_24h >= 5
+        and liquidity_label in {"Thin", "Very thin"}
         and exhaustion_level != "High"
-        and trend_score >= 60
+        and (
+            volume_acceleration_1h >= 1.2
+            or volume_acceleration_2h >= 1.2
+            or change_1h >= 4
+            or change_2h >= 7
+        )
     ):
+        confidence = "Medium" if (
+            volume_acceleration_1h >= 1.5
+            or volume_acceleration_2h >= 1.5
+            or change_1h >= 4
+            or change_2h >= 7
+        ) else "Low"
         return _classification(
-            alert_type="Early Pump Alert",
+            alert_type="Speculative Early Runner Alert",
             should_alert=True,
-            risk_level="Medium",
-            potential_bucket="+20% early continuation watch",
-            confidence="High" if volume_score >= 60 and liquidity_score >= 60 else "Medium",
+            risk_level="High",
+            potential_bucket="High-risk early runner watch",
+            confidence=confidence,
             reason=(
-                "Early pump conditions are present with rising price, "
-                "accelerating volume, acceptable liquidity, and supportive trend."
+                "Thin-liquidity coin showing early abnormal movement. This is "
+                "not a clean continuation setup, but it may be worth monitoring "
+                "before it becomes parabolic."
+            ),
+            component_scores=component_scores,
+        )
+
+    if (move_pct > 50 or change_4h >= 30 or change_24h >= 50) and liquidity_score >= 40:
+        confidence = "High" if volume_score >= 80 and liquidity_score >= 60 else "Medium"
+        return _classification(
+            alert_type="Parabolic Watch Alert",
+            should_alert=True,
+            risk_level="Very High",
+            potential_bucket="High-risk parabolic watch",
+            confidence=confidence,
+            reason=(
+                "This is not a clean entry signal. It is a high-risk market "
+                "activity alert."
             ),
             component_scores=component_scores,
         )
@@ -154,6 +197,75 @@ def classify_explosive_mover(
         reason="Explosive mover conditions are not strong enough for a separate alert.",
         component_scores=component_scores,
     )
+
+
+def evaluate_speculative_early_runner(
+    move_stage_signal: dict,
+    recent_changes: dict,
+    volume_acceleration: dict,
+    liquidity_signal: dict,
+    exhaustion_signal: dict,
+) -> dict:
+    """Return speculative early-runner eligibility and a diagnostic reason."""
+    move_pct = _safe_float(move_stage_signal.get("move_from_recent_low_pct"))
+    change_1h = _safe_float(recent_changes.get("change_1h_pct"))
+    change_2h = _safe_float(recent_changes.get("change_2h_pct"))
+    change_4h = _safe_float(recent_changes.get("change_4h_pct"))
+    change_24h = _safe_float(recent_changes.get("change_24h_pct"))
+    volume_acceleration_1h = _safe_float(
+        volume_acceleration.get("volume_acceleration_1h_ratio")
+    )
+    volume_acceleration_2h = _safe_float(
+        volume_acceleration.get("volume_acceleration_2h_ratio")
+    )
+    liquidity_label = str(liquidity_signal.get("label", ""))
+    exhaustion_level = str(exhaustion_signal.get("risk_level", "Low"))
+    reasons = []
+
+    if move_pct < 5 or move_pct > 20:
+        reasons.append("move from recent low must be between 5% and 20%")
+
+    if not (change_1h >= 2 or change_2h >= 4 or change_4h >= 6):
+        reasons.append("short-term price change is not strong enough")
+
+    if change_24h < 5:
+        reasons.append("24h change is below 5%")
+
+    if liquidity_label not in {"Thin", "Very thin"}:
+        reasons.append("liquidity label is not Thin or Very thin")
+
+    if exhaustion_level == "High":
+        reasons.append("exhaustion risk is High")
+
+    if not (
+        volume_acceleration_1h >= 1.2
+        or volume_acceleration_2h >= 1.2
+        or change_1h >= 4
+        or change_2h >= 7
+    ):
+        reasons.append("no weak volume or price acceleration trigger")
+
+    qualified = not reasons
+    confidence = "Medium" if (
+        volume_acceleration_1h >= 1.5
+        or volume_acceleration_2h >= 1.5
+        or change_1h >= 4
+        or change_2h >= 7
+    ) else "Low"
+
+    if qualified:
+        reason = (
+            "Thin-liquidity early runner conditions are present before the "
+            "move becomes parabolic."
+        )
+    else:
+        reason = "Speculative Early Runner rejected: " + "; ".join(reasons) + "."
+
+    return {
+        "qualified": qualified,
+        "confidence": confidence,
+        "reason": reason,
+    }
 
 
 def _classification(

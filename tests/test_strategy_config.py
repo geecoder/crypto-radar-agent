@@ -9,6 +9,7 @@ from app.trading.strategy_config import (
     get_conservative_paper_trading_strategy,
     get_default_paper_trading_strategy,
     get_parabolic_paper_strategy,
+    get_speculative_early_runner_strategy,
     get_strategy_by_name,
 )
 
@@ -109,12 +110,30 @@ def test_parabolic_strategy_values() -> None:
     assert strategy.simulated_position_size == 25
 
 
+def test_speculative_early_runner_strategy_values() -> None:
+    strategy = get_speculative_early_runner_strategy()
+
+    assert strategy.name == "speculative_early_runner_paper"
+    assert strategy.minimum_opportunity_score == 0
+    assert strategy.min_move_from_recent_low_pct == 5
+    assert strategy.max_move_from_recent_low_pct == 20
+    assert strategy.allow_thin_liquidity is True
+    assert strategy.allow_high_exhaustion is False
+    assert strategy.stop_loss_pct == -7
+    assert strategy.take_profit_1_pct == 10
+    assert strategy.take_profit_2_pct == 20
+    assert strategy.take_profit_3_pct == 35
+    assert strategy.max_hold_hours == 24
+    assert strategy.simulated_position_size == 25
+
+
 def test_get_strategy_by_name_fallback() -> None:
     assert get_strategy_by_name(None).name == "default_momentum_continuation"
     assert get_strategy_by_name("default").name == "default_momentum_continuation"
     assert get_strategy_by_name("conservative").name == "conservative_momentum"
     assert get_strategy_by_name("aggressive").name == "aggressive_high_volatility"
     assert get_strategy_by_name("parabolic").name == "parabolic_continuation_paper"
+    assert get_strategy_by_name("speculative").name == "speculative_early_runner_paper"
     assert get_strategy_by_name("unknown").name == "default_momentum_continuation"
 
 

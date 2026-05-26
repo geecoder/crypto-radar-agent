@@ -93,6 +93,24 @@ def get_parabolic_paper_strategy() -> PaperTradingStrategy:
     )
 
 
+def get_speculative_early_runner_strategy() -> PaperTradingStrategy:
+    """Return the high-risk speculative early-runner paper-only strategy."""
+    return PaperTradingStrategy(
+        name="speculative_early_runner_paper",
+        minimum_opportunity_score=0,
+        min_move_from_recent_low_pct=5,
+        max_move_from_recent_low_pct=20,
+        allow_thin_liquidity=True,
+        allow_high_exhaustion=False,
+        stop_loss_pct=-7,
+        take_profit_1_pct=10,
+        take_profit_2_pct=20,
+        take_profit_3_pct=35,
+        max_hold_hours=24,
+        simulated_position_size=25,
+    )
+
+
 def get_strategy_by_name(name: str | None) -> PaperTradingStrategy:
     """Return a paper trading strategy by short CLI name."""
     if name is None:
@@ -111,5 +129,8 @@ def get_strategy_by_name(name: str | None) -> PaperTradingStrategy:
 
     if normalized_name == "parabolic":
         return get_parabolic_paper_strategy()
+
+    if normalized_name in {"speculative", "early-runner", "early_runner"}:
+        return get_speculative_early_runner_strategy()
 
     return get_default_paper_trading_strategy()

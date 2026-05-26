@@ -3,6 +3,7 @@
 from contextlib import redirect_stdout
 from io import StringIO
 
+from app.indicators.explosive_mover import evaluate_speculative_early_runner
 from app.scanner import scan_symbol
 
 NO_VALID_CONTINUATION_TARGETS = {
@@ -74,6 +75,27 @@ def format_diagnostic_report(result: dict, alert_threshold: int = 60) -> str:
         result,
         trade_plan,
     )
+    explosive_rule_statuses = _explosive_rule_statuses(result)
+    speculative_qualified, speculative_reason = _speculative_early_runner_status(
+        result
+    )
+    alert_type = _explosive_alert_type(result)
+    early_pump_qualified = (
+        explosive_rule_statuses["early_pump"]
+        or alert_type == "Early Pump Alert"
+    )
+    active_breakout_qualified = (
+        explosive_rule_statuses["active_breakout"]
+        or alert_type == "Active Breakout Alert"
+    )
+    speculative_qualified = (
+        speculative_qualified
+        or alert_type == "Speculative Early Runner Alert"
+    )
+    parabolic_qualified = (
+        explosive_rule_statuses["parabolic_watch"]
+        or alert_type == "Parabolic Watch Alert"
+    )
 
     lines = [
         "Missed Mover Diagnostic",
@@ -106,15 +128,20 @@ def format_diagnostic_report(result: dict, alert_threshold: int = 60) -> str:
         ),
         (
             "Would trigger Early Pump Alert? "
-            f"{_format_bool(_explosive_alert_type(result) == 'Early Pump Alert')}"
+            f"{_format_bool(early_pump_qualified)}"
         ),
         (
             "Would trigger Active Breakout Alert? "
-            f"{_format_bool(_explosive_alert_type(result) == 'Active Breakout Alert')}"
+            f"{_format_bool(active_breakout_qualified)}"
         ),
         (
+            "Would trigger Speculative Early Runner Alert? "
+            f"{_format_bool(speculative_qualified)}"
+        ),
+        f"Speculative Early Runner reason: {speculative_reason}",
+        (
             "Would trigger Parabolic Watch Alert? "
-            f"{_format_bool(_explosive_alert_type(result) == 'Parabolic Watch Alert')}"
+            f"{_format_bool(parabolic_qualified)}"
         ),
         (
             "Parabolic paper eligible: "
@@ -218,6 +245,12 @@ def get_recommendation(result: dict, alert_threshold: int = 60) -> str:
 
     if alert_type == "Parabolic Watch Alert" and score < alert_threshold:
         return "This qualifies as a Parabolic Watch Alert but not as a clean trade setup."
+
+    if alert_type == "Speculative Early Runner Alert" and score < alert_threshold:
+        return (
+            "This qualifies as a Speculative Early Runner Alert but not as a "
+            "clean trade setup."
+        )
 
     if score >= alert_threshold or _is_explosive_alert(result):
         return "This symbol currently qualifies as an alert candidate."
@@ -347,6 +380,9 @@ def _is_explosive_alert(result: dict) -> bool:
 
 def _explosive_alert_type(result: dict) -> str:
     """Read the explosive mover alert type."""
+    if result.get("alert_type"):
+        return str(result.get("alert_type"))
+
     return str(result.get("explosive_mover", {}).get("alert_type", ""))
 
 
@@ -370,6 +406,71 @@ def _parabolic_paper_status(result: dict, trade_plan: dict | None) -> tuple[bool
     from app.trading.paper_trading import should_create_parabolic_paper_trade
 
     return should_create_parabolic_paper_trade(result)
+
+
+def _speculative_early_runner_status(result: dict) -> tuple[bool, str]:
+    """Return speculative early-runner eligibility and diagnostic reason."""
+    status = evaluate_speculative_early_runner(
+        result.get("move_stage_signal") or {},
+        result.get("recent_price_changes") or {},
+        result.get("volume_acceleration") or {},
+        result.get("liquidity_signal") or {},
+        result.get("exhaustion_signal") or {},
+    )
+
+    qualified = bool(status.get("qualified"))
+    reason = str(status.get("reason", "Not available"))
+
+    if not qualified and _explosive_alert_type(result) == "Speculative Early Runner Alert":
+        reason = str(result.get("explosive_mover", {}).get("reason") or reason)
+
+    return qualified, reason
+
+
+def _explosive_rule_statuses(result: dict) -> dict:
+    """Return independent eligibility flags for explosive alert categories."""
+    move_stage = result.get("move_stage_signal") or {}
+    recent_changes = result.get("recent_price_changes") or {}
+    volume_acceleration = result.get("volume_acceleration") or {}
+    liquidity = result.get("liquidity_signal") or {}
+    exhaustion = result.get("exhaustion_signal") or {}
+    trend = result.get("trend_signal") or {}
+    volatility = result.get("volatility_signal") or {}
+    move_pct = _safe_float(move_stage.get("move_from_recent_low_pct"))
+    change_1h = _safe_float(recent_changes.get("change_1h_pct"))
+    change_2h = _safe_float(recent_changes.get("change_2h_pct"))
+    change_4h = _safe_float(recent_changes.get("change_4h_pct"))
+    change_24h = _safe_float(recent_changes.get("change_24h_pct"))
+    volume_score = _get_signal_score(volume_acceleration)
+    liquidity_score = _get_signal_score(liquidity)
+    trend_score = _get_signal_score(trend)
+    volatility_score = _get_signal_score(volatility)
+    exhaustion_level = str(exhaustion.get("risk_level", "Low"))
+
+    return {
+        "early_pump": (
+            move_pct >= 3
+            and move_pct <= 10
+            and (change_1h >= 3 or change_2h >= 5)
+            and volume_score >= 40
+            and liquidity_score >= 40
+            and exhaustion_level != "High"
+            and trend_score >= 60
+        ),
+        "active_breakout": (
+            move_pct > 10
+            and move_pct <= 30
+            and (change_1h >= 5 or change_4h >= 12)
+            and volume_score >= 60
+            and liquidity_score >= 40
+            and trend_score >= 60
+            and volatility_score >= 60
+        ),
+        "parabolic_watch": (
+            (move_pct > 50 or change_4h >= 30 or change_24h >= 50)
+            and liquidity_score >= 40
+        ),
+    }
 
 
 def _get_opportunity_score(result: dict) -> int:
