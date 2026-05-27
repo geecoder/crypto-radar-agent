@@ -88,6 +88,34 @@ def test_main_checks_outcomes_and_exits(monkeypatch, capsys) -> None:
     assert "Hit +100%: 0" in output
 
 
+def test_check_outcomes_prints_invalid_supabase_url_without_traceback(
+    monkeypatch,
+    capsys,
+) -> None:
+    monkeypatch.setattr(sys, "argv", ["python -m app.main", "--check-outcomes"])
+    monkeypatch.setattr(
+        app_main,
+        "load_alert_history",
+        lambda: (_ for _ in ()).throw(
+            RuntimeError(app_main.INVALID_SUPABASE_DATABASE_URL_MESSAGE)
+        ),
+    )
+    monkeypatch.setattr(
+        app_main,
+        "BinancePublicClient",
+        lambda: (_ for _ in ()).throw(
+            AssertionError("Binance client should not start after DSN validation fails.")
+        ),
+    )
+
+    app_main.main()
+
+    output = capsys.readouterr().out
+
+    assert app_main.INVALID_SUPABASE_DATABASE_URL_MESSAGE in output
+    assert "Traceback" not in output
+
+
 def test_main_prints_performance_report_and_exits(monkeypatch, capsys) -> None:
     outcomes = {
         "BTCUSDT-1": {

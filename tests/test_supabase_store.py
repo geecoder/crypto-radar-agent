@@ -4,6 +4,8 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 
+import pytest
+
 from app.storage import supabase_store
 
 
@@ -130,6 +132,71 @@ class HealthConnection:
 
     def close(self) -> None:
         self.closed = True
+
+
+def test_validate_supabase_database_url_rejects_missing() -> None:
+    with pytest.raises(RuntimeError) as error:
+        supabase_store._validate_supabase_database_url("")
+
+    assert str(error.value) == supabase_store.INVALID_SUPABASE_DATABASE_URL_MESSAGE
+
+
+def test_validate_supabase_database_url_rejects_invalid_non_uri() -> None:
+    with pytest.raises(RuntimeError) as error:
+        supabase_store._validate_supabase_database_url("***")
+
+    assert str(error.value) == supabase_store.INVALID_SUPABASE_DATABASE_URL_MESSAGE
+    assert "***" not in str(error.value)
+
+
+def test_validate_supabase_database_url_rejects_key_value_secret() -> None:
+    with pytest.raises(RuntimeError) as error:
+        supabase_store._validate_supabase_database_url(
+            "SUPABASE_DATABASE_URL=postgresql://user:password@example/db"
+        )
+
+    assert str(error.value) == supabase_store.INVALID_SUPABASE_DATABASE_URL_MESSAGE
+    assert "password" not in str(error.value)
+
+
+def test_validate_supabase_database_url_rejects_quoted_values() -> None:
+    for value in (
+        '"postgresql://user:password@example/db"',
+        "'postgres://user:password@example/db'",
+    ):
+        with pytest.raises(RuntimeError) as error:
+            supabase_store._validate_supabase_database_url(value)
+
+        assert str(error.value) == supabase_store.INVALID_SUPABASE_DATABASE_URL_MESSAGE
+        assert "password" not in str(error.value)
+
+
+def test_validate_supabase_database_url_accepts_postgres_uris() -> None:
+    supabase_store._validate_supabase_database_url(
+        "postgresql://user:password@example/db"
+    )
+    supabase_store._validate_supabase_database_url(
+        "postgres://user:password@example/db"
+    )
+
+
+def test_get_connection_validates_before_psycopg_connect(monkeypatch) -> None:
+    connect_calls = []
+
+    class FakePsycopg:
+        @staticmethod
+        def connect(database_url):
+            connect_calls.append(database_url)
+            raise AssertionError("connect should not be called for invalid DSN")
+
+    monkeypatch.setattr(supabase_store, "SUPABASE_DATABASE_URL", "***")
+    monkeypatch.setattr(supabase_store, "psycopg2", FakePsycopg)
+
+    with pytest.raises(RuntimeError) as error:
+        supabase_store.get_connection()
+
+    assert str(error.value) == supabase_store.INVALID_SUPABASE_DATABASE_URL_MESSAGE
+    assert connect_calls == []
 
 
 def _paper_trade_row() -> dict:

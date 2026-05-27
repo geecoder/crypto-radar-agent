@@ -44,6 +44,7 @@ from app.storage.supabase_store import (
     create_scan_run,
     fail_scan_run,
     format_persistence_health_check,
+    INVALID_SUPABASE_DATABASE_URL_MESSAGE,
     insert_paper_trade_decision,
     persistence_health_check,
     update_alert_paper_trade_status,
@@ -450,10 +451,17 @@ def main() -> None:
         return
 
     if args.check_outcomes:
-        alert_history = load_alert_history()
-        client = BinancePublicClient()
-        outcomes = check_alert_outcomes(alert_history, client)
-        save_alert_outcomes(outcomes)
+        try:
+            alert_history = load_alert_history()
+            client = BinancePublicClient()
+            outcomes = check_alert_outcomes(alert_history, client)
+            save_alert_outcomes(outcomes)
+        except RuntimeError as error:
+            if str(error) == INVALID_SUPABASE_DATABASE_URL_MESSAGE:
+                print(INVALID_SUPABASE_DATABASE_URL_MESSAGE)
+                return
+
+            raise
 
         print("Outcome check completed.")
         print(f"Alerts checked: {len(alert_history)}")

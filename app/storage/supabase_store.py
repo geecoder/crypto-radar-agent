@@ -45,12 +45,15 @@ SENSITIVE_KEY_PARTS = (
     "database_url",
     "supabase_database_url",
 )
+INVALID_SUPABASE_DATABASE_URL_MESSAGE = (
+    "Invalid SUPABASE_DATABASE_URL. It must be a PostgreSQL URI beginning with "
+    "postgresql:// or postgres://. Check GitHub Secrets."
+)
 
 
 def get_connection():
     """Return a Supabase Postgres connection and ensure tables exist."""
-    if not SUPABASE_DATABASE_URL:
-        raise RuntimeError("SUPABASE_DATABASE_URL is required for Supabase storage.")
+    _validate_supabase_database_url(SUPABASE_DATABASE_URL)
 
     if psycopg2 is None:
         raise RuntimeError("psycopg2-binary is required for Supabase storage.")
@@ -58,6 +61,26 @@ def get_connection():
     connection = psycopg2.connect(SUPABASE_DATABASE_URL)
     _ensure_tables(connection)
     return connection
+
+
+def _validate_supabase_database_url(database_url: str | None) -> None:
+    """Validate the configured Supabase Postgres URI without exposing it."""
+    if not database_url:
+        raise RuntimeError(INVALID_SUPABASE_DATABASE_URL_MESSAGE)
+
+    database_url = str(database_url).strip()
+
+    if not database_url:
+        raise RuntimeError(INVALID_SUPABASE_DATABASE_URL_MESSAGE)
+
+    if database_url.startswith(("'", '"')) or database_url.endswith(("'", '"')):
+        raise RuntimeError(INVALID_SUPABASE_DATABASE_URL_MESSAGE)
+
+    if "SUPABASE_DATABASE_URL=" in database_url:
+        raise RuntimeError(INVALID_SUPABASE_DATABASE_URL_MESSAGE)
+
+    if not database_url.startswith(("postgresql://", "postgres://")):
+        raise RuntimeError(INVALID_SUPABASE_DATABASE_URL_MESSAGE)
 
 
 def _ensure_tables(connection) -> None:
