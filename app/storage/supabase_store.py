@@ -1,8 +1,10 @@
 """Supabase Postgres persistence helpers."""
 
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from decimal import Decimal
+import json
 from typing import Any
+from uuid import uuid4
 
 try:
     import psycopg2
@@ -12,7 +14,37 @@ except ModuleNotFoundError:
     Json = None
     RealDictCursor = None
 
-from app.config import SUPABASE_DATABASE_URL
+from app.config import PERSISTENCE_BACKEND, SUPABASE_DATABASE_URL
+
+HEALTH_CHECK_TABLES = (
+    "alert_history",
+    "paper_trades",
+    "alert_outcomes",
+    "scan_runs",
+    "paper_trade_decisions",
+)
+HEALTH_CHECK_LATEST_TABLES = (
+    "alert_history",
+    "scan_runs",
+    "paper_trade_decisions",
+)
+HEALTH_CHECK_ORDER_COLUMNS = (
+    "created_at",
+    "started_at",
+    "alerted_at",
+    "decided_at",
+    "updated_at",
+    "id",
+)
+SENSITIVE_KEY_PARTS = (
+    "secret",
+    "token",
+    "password",
+    "api_key",
+    "apikey",
+    "database_url",
+    "supabase_database_url",
+)
 
 
 def get_connection():
@@ -51,8 +83,25 @@ def _ensure_tables(connection) -> None:
                 opportunity_score INTEGER,
                 classification TEXT,
                 target_bucket TEXT,
+                continuation_target TEXT,
+                move_stage TEXT,
+                move_from_recent_low_pct NUMERIC,
+                liquidity_label TEXT,
+                exhaustion_risk_level TEXT,
                 risk_level TEXT,
+                alert_type TEXT,
+                confidence TEXT,
+                potential_bucket TEXT,
+                reason TEXT,
                 summary TEXT,
+                recent_price_changes JSONB,
+                volume_acceleration JSONB,
+                explosive_mover JSONB,
+                trade_plan JSONB,
+                trade_plan_type TEXT,
+                should_paper_trade BOOLEAN NOT NULL DEFAULT FALSE,
+                scan_run_id TEXT,
+                source TEXT,
                 component_scores JSONB,
                 volume_signal JSONB,
                 momentum_signal JSONB,
@@ -60,10 +109,59 @@ def _ensure_tables(connection) -> None:
                 trend_signal JSONB,
                 volatility_signal JSONB,
                 telegram_sent BOOLEAN NOT NULL DEFAULT FALSE,
+                telegram_error TEXT,
+                paper_trade_created BOOLEAN NOT NULL DEFAULT FALSE,
+                paper_trade_id TEXT,
+                paper_trade_skip_reason TEXT,
                 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
             )
             """
         )
+        for statement in (
+            'ALTER TABLE alert_history ADD COLUMN IF NOT EXISTS alert_type TEXT',
+            'ALTER TABLE alert_history ADD COLUMN IF NOT EXISTS continuation_target TEXT',
+            'ALTER TABLE alert_history ADD COLUMN IF NOT EXISTS move_stage TEXT',
+            (
+                'ALTER TABLE alert_history ADD COLUMN IF NOT EXISTS '
+                'move_from_recent_low_pct NUMERIC'
+            ),
+            'ALTER TABLE alert_history ADD COLUMN IF NOT EXISTS liquidity_label TEXT',
+            (
+                'ALTER TABLE alert_history ADD COLUMN IF NOT EXISTS '
+                'exhaustion_risk_level TEXT'
+            ),
+            'ALTER TABLE alert_history ADD COLUMN IF NOT EXISTS confidence TEXT',
+            'ALTER TABLE alert_history ADD COLUMN IF NOT EXISTS potential_bucket TEXT',
+            'ALTER TABLE alert_history ADD COLUMN IF NOT EXISTS reason TEXT',
+            (
+                'ALTER TABLE alert_history ADD COLUMN IF NOT EXISTS '
+                'recent_price_changes JSONB'
+            ),
+            (
+                'ALTER TABLE alert_history ADD COLUMN IF NOT EXISTS '
+                'volume_acceleration JSONB'
+            ),
+            'ALTER TABLE alert_history ADD COLUMN IF NOT EXISTS explosive_mover JSONB',
+            'ALTER TABLE alert_history ADD COLUMN IF NOT EXISTS trade_plan JSONB',
+            'ALTER TABLE alert_history ADD COLUMN IF NOT EXISTS trade_plan_type TEXT',
+            (
+                'ALTER TABLE alert_history ADD COLUMN IF NOT EXISTS '
+                'should_paper_trade BOOLEAN NOT NULL DEFAULT FALSE'
+            ),
+            'ALTER TABLE alert_history ADD COLUMN IF NOT EXISTS scan_run_id TEXT',
+            'ALTER TABLE alert_history ADD COLUMN IF NOT EXISTS source TEXT',
+            'ALTER TABLE alert_history ADD COLUMN IF NOT EXISTS telegram_error TEXT',
+            (
+                'ALTER TABLE alert_history ADD COLUMN IF NOT EXISTS '
+                'paper_trade_created BOOLEAN NOT NULL DEFAULT FALSE'
+            ),
+            'ALTER TABLE alert_history ADD COLUMN IF NOT EXISTS paper_trade_id TEXT',
+            (
+                'ALTER TABLE alert_history ADD COLUMN IF NOT EXISTS '
+                'paper_trade_skip_reason TEXT'
+            ),
+        ):
+            cursor.execute(statement)
         cursor.execute(
             """
             CREATE TABLE IF NOT EXISTS alert_outcomes (
@@ -95,6 +193,8 @@ def _ensure_tables(connection) -> None:
             CREATE TABLE IF NOT EXISTS paper_trades (
                 id TEXT PRIMARY KEY,
                 alert_id TEXT,
+                alert_history_id TEXT,
+                source_alert_id TEXT,
                 strategy_name TEXT,
                 alert_type TEXT,
                 trade_plan_type TEXT,
@@ -147,6 +247,18 @@ def _ensure_tables(connection) -> None:
         )
         cursor.execute(
             """
+            ALTER TABLE paper_trades
+            ADD COLUMN IF NOT EXISTS alert_history_id TEXT
+            """
+        )
+        cursor.execute(
+            """
+            ALTER TABLE paper_trades
+            ADD COLUMN IF NOT EXISTS source_alert_id TEXT
+            """
+        )
+        cursor.execute(
+            """
             CREATE TABLE IF NOT EXISTS paper_trade_events (
                 paper_trade_id TEXT,
                 symbol TEXT,
@@ -159,8 +271,237 @@ def _ensure_tables(connection) -> None:
             )
             """
         )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS scan_runs (
+                id TEXT PRIMARY KEY,
+                run_source TEXT,
+                started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                completed_at TIMESTAMPTZ,
+                status TEXT NOT NULL DEFAULT 'running',
+                binance_base_url_order TEXT,
+                paper_strategy TEXT,
+                metadata JSONB,
+                total_active_symbols INTEGER,
+                total_scan_universe INTEGER,
+                total_alert_candidates INTEGER,
+                total_telegram_sent INTEGER,
+                total_paper_trades_created INTEGER,
+                total_paper_trades_skipped INTEGER,
+                error_message TEXT,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+            """
+        )
+        for statement in (
+            'ALTER TABLE scan_runs ADD COLUMN IF NOT EXISTS run_source TEXT',
+            (
+                'ALTER TABLE scan_runs ADD COLUMN IF NOT EXISTS '
+                'started_at TIMESTAMPTZ NOT NULL DEFAULT NOW()'
+            ),
+            'ALTER TABLE scan_runs ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ',
+            (
+                "ALTER TABLE scan_runs ADD COLUMN IF NOT EXISTS "
+                "status TEXT NOT NULL DEFAULT 'running'"
+            ),
+            (
+                'ALTER TABLE scan_runs ADD COLUMN IF NOT EXISTS '
+                'binance_base_url_order TEXT'
+            ),
+            'ALTER TABLE scan_runs ADD COLUMN IF NOT EXISTS paper_strategy TEXT',
+            'ALTER TABLE scan_runs ADD COLUMN IF NOT EXISTS metadata JSONB',
+            (
+                'ALTER TABLE scan_runs ADD COLUMN IF NOT EXISTS '
+                'total_active_symbols INTEGER'
+            ),
+            (
+                'ALTER TABLE scan_runs ADD COLUMN IF NOT EXISTS '
+                'total_scan_universe INTEGER'
+            ),
+            (
+                'ALTER TABLE scan_runs ADD COLUMN IF NOT EXISTS '
+                'total_alert_candidates INTEGER'
+            ),
+            (
+                'ALTER TABLE scan_runs ADD COLUMN IF NOT EXISTS '
+                'total_telegram_sent INTEGER'
+            ),
+            (
+                'ALTER TABLE scan_runs ADD COLUMN IF NOT EXISTS '
+                'total_paper_trades_created INTEGER'
+            ),
+            (
+                'ALTER TABLE scan_runs ADD COLUMN IF NOT EXISTS '
+                'total_paper_trades_skipped INTEGER'
+            ),
+            'ALTER TABLE scan_runs ADD COLUMN IF NOT EXISTS error_message TEXT',
+            (
+                'ALTER TABLE scan_runs ADD COLUMN IF NOT EXISTS '
+                'created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()'
+            ),
+            (
+                'ALTER TABLE scan_runs ADD COLUMN IF NOT EXISTS '
+                'updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()'
+            ),
+        ):
+            cursor.execute(statement)
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS paper_trade_decisions (
+                id TEXT PRIMARY KEY,
+                symbol TEXT,
+                alert_type TEXT,
+                alert_history_id TEXT,
+                paper_trade_id TEXT,
+                decision TEXT,
+                eligible BOOLEAN NOT NULL DEFAULT FALSE,
+                reason TEXT,
+                strategy_name TEXT,
+                trade_plan_type TEXT,
+                metadata JSONB,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+            """
+        )
+        for statement in (
+            'ALTER TABLE paper_trade_decisions ADD COLUMN IF NOT EXISTS symbol TEXT',
+            'ALTER TABLE paper_trade_decisions ADD COLUMN IF NOT EXISTS alert_type TEXT',
+            (
+                'ALTER TABLE paper_trade_decisions ADD COLUMN IF NOT EXISTS '
+                'alert_history_id TEXT'
+            ),
+            (
+                'ALTER TABLE paper_trade_decisions ADD COLUMN IF NOT EXISTS '
+                'paper_trade_id TEXT'
+            ),
+            'ALTER TABLE paper_trade_decisions ADD COLUMN IF NOT EXISTS decision TEXT',
+            (
+                'ALTER TABLE paper_trade_decisions ADD COLUMN IF NOT EXISTS '
+                'eligible BOOLEAN NOT NULL DEFAULT FALSE'
+            ),
+            'ALTER TABLE paper_trade_decisions ADD COLUMN IF NOT EXISTS reason TEXT',
+            (
+                'ALTER TABLE paper_trade_decisions ADD COLUMN IF NOT EXISTS '
+                'strategy_name TEXT'
+            ),
+            (
+                'ALTER TABLE paper_trade_decisions ADD COLUMN IF NOT EXISTS '
+                'trade_plan_type TEXT'
+            ),
+            'ALTER TABLE paper_trade_decisions ADD COLUMN IF NOT EXISTS metadata JSONB',
+            (
+                'ALTER TABLE paper_trade_decisions ADD COLUMN IF NOT EXISTS '
+                'created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()'
+            ),
+        ):
+            cursor.execute(statement)
 
     connection.commit()
+
+
+def persistence_health_check() -> dict:
+    """Return a read-only persistence health report without exposing secrets."""
+    backend = (PERSISTENCE_BACKEND or "json").strip().lower() or "json"
+    report = {
+        "backend": backend,
+        "supabase_url_configured": bool(SUPABASE_DATABASE_URL),
+        "connection_ok": False,
+        "counts": {table: None for table in HEALTH_CHECK_TABLES},
+        "latest_alert_history": [],
+        "latest_scan_runs": [],
+        "latest_paper_trade_decisions": [],
+        "warnings": [],
+    }
+
+    if backend != "supabase":
+        report["warnings"].append(
+            "Supabase connection not tested because PERSISTENCE_BACKEND is not supabase."
+        )
+        return report
+
+    if not SUPABASE_DATABASE_URL:
+        report["warnings"].append(
+            "Supabase backend selected but SUPABASE_DATABASE_URL is not configured."
+        )
+        return report
+
+    try:
+        connection = get_connection()
+    except Exception as error:
+        report["warnings"].append(
+            f"Supabase connection failed: {_safe_error_message(error)}"
+        )
+        return report
+
+    report["connection_ok"] = True
+
+    try:
+        for table_name in HEALTH_CHECK_TABLES:
+            report["counts"][table_name] = _health_check_count_table(
+                connection,
+                table_name,
+                report["warnings"],
+            )
+
+        report["latest_alert_history"] = _health_check_latest_rows(
+            connection,
+            "alert_history",
+            report["warnings"],
+        )
+        report["latest_scan_runs"] = _health_check_latest_rows(
+            connection,
+            "scan_runs",
+            report["warnings"],
+        )
+        report["latest_paper_trade_decisions"] = _health_check_latest_rows(
+            connection,
+            "paper_trade_decisions",
+            report["warnings"],
+        )
+    finally:
+        connection.close()
+
+    return report
+
+
+def format_persistence_health_check(report: dict) -> str:
+    """Format a persistence health report without printing secret values."""
+    counts = report.get("counts") or {}
+    lines = [
+        "Persistence Health Check",
+        f"Backend: {report.get('backend', 'unknown')}",
+        (
+            "SUPABASE_DATABASE_URL configured: "
+            f"{str(bool(report.get('supabase_url_configured'))).lower()}"
+        ),
+        f"Connection OK: {str(bool(report.get('connection_ok'))).lower()}",
+        "",
+        "Counts:",
+    ]
+
+    for table_name in HEALTH_CHECK_TABLES:
+        count = counts.get(table_name)
+        lines.append(f"- {table_name}: {_format_optional_count(count)}")
+
+    lines.extend(["", "Latest alert_history:"])
+    lines.extend(_format_latest_alert_history(report.get("latest_alert_history") or []))
+    lines.extend(["", "Latest scan_runs:"])
+    lines.extend(_format_latest_scan_runs(report.get("latest_scan_runs") or []))
+    lines.extend(["", "Latest paper_trade_decisions:"])
+    lines.extend(
+        _format_latest_paper_trade_decisions(
+            report.get("latest_paper_trade_decisions") or []
+        )
+    )
+
+    warnings = list(report.get("warnings") or [])
+
+    if warnings:
+        lines.extend(["", "Warnings:"])
+        lines.extend(f"- {_redact_sensitive(str(warning))}" for warning in warnings)
+
+    return "\n".join(lines)
 
 
 def get_alert_state(symbol: str) -> dict | None:
@@ -235,19 +576,43 @@ def insert_alert_history(record: dict) -> None:
                         opportunity_score,
                         classification,
                         target_bucket,
+                        continuation_target,
+                        move_stage,
+                        move_from_recent_low_pct,
+                        liquidity_label,
+                        exhaustion_risk_level,
                         risk_level,
+                        alert_type,
+                        confidence,
+                        potential_bucket,
+                        reason,
                         summary,
+                        recent_price_changes,
+                        volume_acceleration,
+                        explosive_mover,
+                        trade_plan,
+                        trade_plan_type,
+                        should_paper_trade,
+                        scan_run_id,
+                        source,
                         component_scores,
                         volume_signal,
                         momentum_signal,
                         breakout_signal,
                         trend_signal,
                         volatility_signal,
-                        telegram_sent
+                        telegram_sent,
+                        telegram_error,
+                        paper_trade_created,
+                        paper_trade_id,
+                        paper_trade_skip_reason
                     )
                     VALUES (
                         %s, %s, %s, %s, %s, %s, %s, %s,
-                        %s, %s, %s, %s, %s, %s, %s, %s
+                        %s, %s, %s, %s, %s, %s, %s, %s,
+                        %s, %s, %s, %s, %s, %s, %s, %s,
+                        %s, %s, %s, %s, %s, %s, %s, %s,
+                        %s, %s, %s, %s, %s
                     )
                     ON CONFLICT (id) DO NOTHING
                     """,
@@ -259,15 +624,36 @@ def insert_alert_history(record: dict) -> None:
                         record.get("opportunity_score"),
                         record.get("classification"),
                         record.get("target_bucket"),
+                        record.get("continuation_target"),
+                        record.get("move_stage"),
+                        record.get("move_from_recent_low_pct"),
+                        record.get("liquidity_label"),
+                        record.get("exhaustion_risk_level"),
                         record.get("risk_level"),
+                        record.get("alert_type"),
+                        record.get("confidence"),
+                        record.get("potential_bucket"),
+                        record.get("reason"),
                         record.get("summary"),
-                        Json(record.get("component_scores")),
-                        Json(record.get("volume_signal")),
-                        Json(record.get("momentum_signal")),
-                        Json(record.get("breakout_signal")),
-                        Json(record.get("trend_signal")),
-                        Json(record.get("volatility_signal")),
+                        _json_param(record.get("recent_price_changes")),
+                        _json_param(record.get("volume_acceleration")),
+                        _json_param(record.get("explosive_mover")),
+                        _json_param(record.get("trade_plan")),
+                        record.get("trade_plan_type"),
+                        bool(record.get("should_paper_trade")),
+                        record.get("scan_run_id"),
+                        record.get("source", "scanner"),
+                        _json_param(record.get("component_scores")),
+                        _json_param(record.get("volume_signal")),
+                        _json_param(record.get("momentum_signal")),
+                        _json_param(record.get("breakout_signal")),
+                        _json_param(record.get("trend_signal")),
+                        _json_param(record.get("volatility_signal")),
                         bool(record.get("telegram_sent")),
+                        record.get("telegram_error"),
+                        bool(record.get("paper_trade_created")),
+                        record.get("paper_trade_id"),
+                        record.get("paper_trade_skip_reason"),
                     ),
                 )
     finally:
@@ -295,8 +681,25 @@ def load_alert_history(limit: int | None = None) -> list[dict]:
                             opportunity_score,
                             classification,
                             target_bucket,
+                            continuation_target,
+                            move_stage,
+                            move_from_recent_low_pct,
+                            liquidity_label,
+                            exhaustion_risk_level,
                             risk_level,
+                            alert_type,
+                            confidence,
+                            potential_bucket,
+                            reason,
                             summary,
+                            recent_price_changes,
+                            volume_acceleration,
+                            explosive_mover,
+                            trade_plan,
+                            trade_plan_type,
+                            should_paper_trade,
+                            scan_run_id,
+                            source,
                             component_scores,
                             volume_signal,
                             momentum_signal,
@@ -304,6 +707,10 @@ def load_alert_history(limit: int | None = None) -> list[dict]:
                             trend_signal,
                             volatility_signal,
                             telegram_sent,
+                            telegram_error,
+                            paper_trade_created,
+                            paper_trade_id,
+                            paper_trade_skip_reason,
                             created_at
                         FROM alert_history
                         ORDER BY alerted_at ASC, id ASC
@@ -320,8 +727,25 @@ def load_alert_history(limit: int | None = None) -> list[dict]:
                             opportunity_score,
                             classification,
                             target_bucket,
+                            continuation_target,
+                            move_stage,
+                            move_from_recent_low_pct,
+                            liquidity_label,
+                            exhaustion_risk_level,
                             risk_level,
+                            alert_type,
+                            confidence,
+                            potential_bucket,
+                            reason,
                             summary,
+                            recent_price_changes,
+                            volume_acceleration,
+                            explosive_mover,
+                            trade_plan,
+                            trade_plan_type,
+                            should_paper_trade,
+                            scan_run_id,
+                            source,
                             component_scores,
                             volume_signal,
                             momentum_signal,
@@ -329,6 +753,10 @@ def load_alert_history(limit: int | None = None) -> list[dict]:
                             trend_signal,
                             volatility_signal,
                             telegram_sent,
+                            telegram_error,
+                            paper_trade_created,
+                            paper_trade_id,
+                            paper_trade_skip_reason,
                             created_at
                         FROM alert_history
                         ORDER BY alerted_at ASC, id ASC
@@ -342,6 +770,227 @@ def load_alert_history(limit: int | None = None) -> list[dict]:
         connection.close()
 
     return [_alert_history_row_to_record(row) for row in rows]
+
+
+def update_alert_telegram_status(
+    alert_history_id: str | None,
+    sent: bool,
+    error: str | None = None,
+) -> None:
+    """Update the Telegram delivery status for one persisted alert."""
+    if not alert_history_id:
+        return
+
+    connection = get_connection()
+
+    try:
+        with connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    UPDATE alert_history
+                    SET
+                        telegram_sent = %s,
+                        telegram_error = %s
+                    WHERE id = %s
+                    """,
+                    (bool(sent), error, alert_history_id),
+                )
+    finally:
+        connection.close()
+
+
+def update_alert_paper_trade_status(
+    alert_history_id: str | None,
+    paper_trade_created: bool,
+    paper_trade_id: str | None = None,
+    skip_reason: str | None = None,
+) -> None:
+    """Update the paper-trade outcome for one persisted alert."""
+    if not alert_history_id:
+        return
+
+    connection = get_connection()
+
+    try:
+        with connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    UPDATE alert_history
+                    SET
+                        paper_trade_created = %s,
+                        paper_trade_id = %s,
+                        paper_trade_skip_reason = %s
+                    WHERE id = %s
+                    """,
+                    (
+                        bool(paper_trade_created),
+                        paper_trade_id,
+                        skip_reason,
+                        alert_history_id,
+                    ),
+                )
+    finally:
+        connection.close()
+
+
+def create_scan_run(metadata: dict | None = None) -> str:
+    """Create and persist a scanner run record, returning its ID."""
+    metadata = dict(metadata or {})
+    scan_run_id = str(metadata.get("id") or f"scan_{uuid4().hex}")
+    started_at = metadata.get("timestamp") or _utc_now_iso()
+
+    connection = get_connection()
+
+    try:
+        with connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    INSERT INTO scan_runs (
+                        id,
+                        run_source,
+                        started_at,
+                        status,
+                        binance_base_url_order,
+                        paper_strategy,
+                        metadata
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (id) DO NOTHING
+                    """,
+                    (
+                        scan_run_id,
+                        metadata.get("run_source"),
+                        started_at,
+                        "running",
+                        metadata.get("binance_base_url_order"),
+                        metadata.get("paper_strategy"),
+                        _json_param(metadata),
+                    ),
+                )
+    finally:
+        connection.close()
+
+    return scan_run_id
+
+
+def complete_scan_run(scan_run_id: str | None, summary: dict | None = None) -> None:
+    """Mark a scanner run completed with summary counts."""
+    if not scan_run_id:
+        return
+
+    summary = dict(summary or {})
+    connection = get_connection()
+
+    try:
+        with connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    UPDATE scan_runs
+                    SET
+                        completed_at = NOW(),
+                        status = %s,
+                        total_active_symbols = %s,
+                        total_scan_universe = %s,
+                        total_alert_candidates = %s,
+                        total_telegram_sent = %s,
+                        total_paper_trades_created = %s,
+                        total_paper_trades_skipped = %s,
+                        metadata = COALESCE(metadata, '{}'::jsonb) || %s::jsonb,
+                        updated_at = NOW()
+                    WHERE id = %s
+                    """,
+                    (
+                        summary.get("status", "completed"),
+                        summary.get("total_active_symbols"),
+                        summary.get("total_scan_universe"),
+                        summary.get("total_alert_candidates"),
+                        summary.get("total_telegram_sent"),
+                        summary.get("total_paper_trades_created"),
+                        summary.get("total_paper_trades_skipped"),
+                        json.dumps(summary),
+                        scan_run_id,
+                    ),
+                )
+    finally:
+        connection.close()
+
+
+def fail_scan_run(scan_run_id: str | None, error_message: str) -> None:
+    """Mark a scanner run failed without leaking secret values."""
+    if not scan_run_id:
+        return
+
+    safe_error = _safe_error_message(Exception(error_message))
+    connection = get_connection()
+
+    try:
+        with connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    UPDATE scan_runs
+                    SET
+                        completed_at = NOW(),
+                        status = %s,
+                        error_message = %s,
+                        updated_at = NOW()
+                    WHERE id = %s
+                    """,
+                    ("failed", safe_error, scan_run_id),
+                )
+    finally:
+        connection.close()
+
+
+def insert_paper_trade_decision(record: dict) -> str:
+    """Insert a paper-trade decision row for one alert candidate."""
+    decision_id = str(record.get("id") or f"decision_{uuid4().hex}")
+
+    connection = get_connection()
+
+    try:
+        with connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    INSERT INTO paper_trade_decisions (
+                        id,
+                        symbol,
+                        alert_type,
+                        alert_history_id,
+                        paper_trade_id,
+                        decision,
+                        eligible,
+                        reason,
+                        strategy_name,
+                        trade_plan_type,
+                        metadata
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (id) DO NOTHING
+                    """,
+                    (
+                        decision_id,
+                        record.get("symbol"),
+                        record.get("alert_type"),
+                        record.get("alert_history_id"),
+                        record.get("paper_trade_id"),
+                        record.get("decision"),
+                        bool(record.get("eligible")),
+                        record.get("reason"),
+                        record.get("strategy_name"),
+                        record.get("trade_plan_type"),
+                        _json_param(record.get("metadata", {})),
+                    ),
+                )
+    finally:
+        connection.close()
+
+    return decision_id
 
 
 def upsert_alert_outcome(record: dict) -> None:
@@ -414,7 +1063,7 @@ def upsert_alert_outcome(record: dict) -> None:
                         record.get("classification"),
                         record.get("target_bucket"),
                         record.get("risk_level"),
-                        Json(record.get("checkpoints", _build_checkpoints(record))),
+                        _json_param(record.get("checkpoints", _build_checkpoints(record))),
                         _first_present(record, "max_high_after_alert", "highest_price"),
                         _first_present(record, "max_upside_pct", "highest_return_pct"),
                         record.get("min_low_after_alert"),
@@ -492,6 +1141,8 @@ def insert_paper_trade(record: dict) -> None:
                     INSERT INTO paper_trades (
                         id,
                         alert_id,
+                        alert_history_id,
+                        source_alert_id,
                         strategy_name,
                         alert_type,
                         trade_plan_type,
@@ -524,13 +1175,15 @@ def insert_paper_trade(record: dict) -> None:
                         %s, %s, %s, %s, %s, %s, %s, %s, %s,
                         %s, %s, %s, %s, %s, %s, %s, %s, %s,
                         %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                        %s, %s
+                        %s, %s, %s, %s
                     )
                     ON CONFLICT (id) DO NOTHING
                     """,
                     (
                         record_id,
                         record.get("alert_id"),
+                        record.get("alert_history_id"),
+                        record.get("source_alert_id"),
                         record.get("strategy_name"),
                         record.get("alert_type"),
                         record.get("trade_plan_type"),
@@ -576,6 +1229,8 @@ def get_open_paper_trades() -> list[dict]:
                     SELECT
                         id,
                         alert_id,
+                        alert_history_id,
+                        source_alert_id,
                         strategy_name,
                         alert_type,
                         trade_plan_type,
@@ -628,6 +1283,8 @@ def update_paper_trade(trade_id: str, updates: dict) -> None:
 
     column_by_key = {
         "alert_id": "alert_id",
+        "alert_history_id": "alert_history_id",
+        "source_alert_id": "source_alert_id",
         "strategy_name": "strategy_name",
         "alert_type": "alert_type",
         "trade_plan_type": "trade_plan_type",
@@ -716,7 +1373,7 @@ def insert_paper_trade_event(record: dict) -> None:
                         _first_present(record, "type", "event_type"),
                         _paper_trade_event_price(record),
                         _paper_trade_event_notes(record),
-                        Json(record.get("metadata", record)),
+                        _json_param(record.get("metadata", record)),
                     ),
                 )
     finally:
@@ -739,6 +1396,8 @@ def load_paper_trades(limit: int | None = None) -> list[dict]:
                         SELECT
                             id,
                             alert_id,
+                            alert_history_id,
+                            source_alert_id,
                             strategy_name,
                             alert_type,
                             trade_plan_type,
@@ -778,6 +1437,8 @@ def load_paper_trades(limit: int | None = None) -> list[dict]:
                         SELECT
                             id,
                             alert_id,
+                            alert_history_id,
+                            source_alert_id,
                             strategy_name,
                             alert_type,
                             trade_plan_type,
@@ -831,8 +1492,27 @@ def _alert_history_row_to_record(row: dict) -> dict:
         "opportunity_score": row.get("opportunity_score"),
         "classification": row.get("classification"),
         "target_bucket": row.get("target_bucket"),
+        "continuation_target": row.get("continuation_target"),
+        "move_stage": row.get("move_stage"),
+        "move_from_recent_low_pct": _to_plain_number(
+            row.get("move_from_recent_low_pct")
+        ),
+        "liquidity_label": row.get("liquidity_label"),
+        "exhaustion_risk_level": row.get("exhaustion_risk_level"),
         "risk_level": row.get("risk_level"),
+        "alert_type": row.get("alert_type"),
+        "confidence": row.get("confidence"),
+        "potential_bucket": row.get("potential_bucket"),
+        "reason": row.get("reason"),
         "summary": row.get("summary"),
+        "recent_price_changes": _as_json_value(row.get("recent_price_changes")),
+        "volume_acceleration": _as_json_value(row.get("volume_acceleration")),
+        "explosive_mover": _as_json_value(row.get("explosive_mover")),
+        "trade_plan": _as_json_value(row.get("trade_plan")),
+        "trade_plan_type": row.get("trade_plan_type"),
+        "should_paper_trade": bool(row.get("should_paper_trade")),
+        "scan_run_id": row.get("scan_run_id"),
+        "source": row.get("source"),
         "component_scores": _as_json_value(row.get("component_scores")),
         "volume_signal": _as_json_value(row.get("volume_signal")),
         "momentum_signal": _as_json_value(row.get("momentum_signal")),
@@ -840,6 +1520,10 @@ def _alert_history_row_to_record(row: dict) -> dict:
         "trend_signal": _as_json_value(row.get("trend_signal")),
         "volatility_signal": _as_json_value(row.get("volatility_signal")),
         "telegram_sent": bool(row.get("telegram_sent")),
+        "telegram_error": row.get("telegram_error"),
+        "paper_trade_created": bool(row.get("paper_trade_created")),
+        "paper_trade_id": row.get("paper_trade_id"),
+        "paper_trade_skip_reason": row.get("paper_trade_skip_reason"),
         "created_at": _to_iso(row.get("created_at")),
     }
 
@@ -882,6 +1566,8 @@ def _paper_trade_row_to_record(row: dict) -> dict:
     return {
         "id": row.get("id"),
         "alert_id": row.get("alert_id"),
+        "alert_history_id": row.get("alert_history_id"),
+        "source_alert_id": row.get("source_alert_id"),
         "strategy_name": row.get("strategy_name"),
         "alert_type": row.get("alert_type"),
         "trade_plan_type": row.get("trade_plan_type"),
@@ -950,6 +1636,311 @@ def _paper_trade_event_notes(record: dict) -> Any:
     return None
 
 
+def _health_check_count_table(connection, table_name: str, warnings: list[str]):
+    """Return a table count, or None if the health-check query fails."""
+    try:
+        with connection.cursor(cursor_factory=RealDictCursor) as cursor:
+            cursor.execute(
+                f"""
+                SELECT COUNT(*) AS record_count
+                FROM {_health_check_table_name(table_name)}
+                """
+            )
+            row = _fetch_one(cursor)
+    except Exception as error:
+        _rollback_safely(connection)
+        _append_health_check_warning(table_name, error, warnings)
+        return None
+
+    if not row:
+        return 0
+
+    return int(row.get("record_count", 0) or 0)
+
+
+def _health_check_latest_rows(
+    connection,
+    table_name: str,
+    warnings: list[str],
+) -> list[dict]:
+    """Return up to five recent rows from a table, handling missing tables."""
+    try:
+        order_column = _health_check_order_column(connection, table_name)
+        order_clause = (
+            f" ORDER BY {order_column} DESC NULLS LAST"
+            if order_column is not None
+            else ""
+        )
+
+        with connection.cursor(cursor_factory=RealDictCursor) as cursor:
+            cursor.execute(
+                f"""
+                SELECT *
+                FROM {_health_check_table_name(table_name)}
+                {order_clause}
+                LIMIT 5
+                """
+            )
+            rows = cursor.fetchall()
+    except Exception as error:
+        _rollback_safely(connection)
+        _append_health_check_warning(table_name, error, warnings)
+        return []
+
+    return [_normalize_record(dict(row)) for row in rows]
+
+
+def _health_check_order_column(connection, table_name: str) -> str | None:
+    """Return the best available column for latest-record ordering."""
+    with connection.cursor(cursor_factory=RealDictCursor) as cursor:
+        cursor.execute(
+            """
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_schema = 'public'
+            AND table_name = %s
+            """,
+            (table_name,),
+        )
+        rows = cursor.fetchall()
+
+    column_names = {str(row.get("column_name")) for row in rows}
+
+    for column_name in HEALTH_CHECK_ORDER_COLUMNS:
+        if column_name in column_names:
+            return column_name
+
+    return None
+
+
+def _health_check_table_name(table_name: str) -> str:
+    """Return an internal health-check table name for SQL interpolation."""
+    if table_name not in HEALTH_CHECK_TABLES:
+        raise ValueError(f"Unsupported health-check table: {table_name}")
+
+    return table_name
+
+
+def _fetch_one(cursor) -> dict | None:
+    """Fetch one row from DB cursors and simple test doubles."""
+    if hasattr(cursor, "fetchone"):
+        return cursor.fetchone()
+
+    rows = cursor.fetchall()
+
+    if not rows:
+        return None
+
+    return rows[0]
+
+
+def _append_health_check_warning(
+    table_name: str,
+    error: Exception,
+    warnings: list[str],
+) -> None:
+    """Append a concise health-check warning without leaking secrets."""
+    if _is_missing_table_error(error):
+        if table_name in {"scan_runs", "paper_trade_decisions"}:
+            warning = (
+                f"Table missing: {table_name}. "
+                "Run the Stage 37 Supabase SQL migration."
+            )
+        else:
+            warning = f"Table missing: {table_name}."
+    else:
+        warning = (
+            f"Could not query {table_name}: {_safe_error_message(error)}"
+        )
+
+    if warning not in warnings:
+        warnings.append(warning)
+
+
+def _is_missing_table_error(error: Exception) -> bool:
+    """Return whether a database error indicates a missing table."""
+    error_name = error.__class__.__name__.lower()
+    error_text = str(error).lower()
+
+    return (
+        "undefinedtable" in error_name
+        or "undefined_table" in error_name
+        or "does not exist" in error_text
+        or "no such table" in error_text
+    )
+
+
+def _rollback_safely(connection) -> None:
+    """Rollback a failed health-check query when the connection supports it."""
+    if not hasattr(connection, "rollback"):
+        return
+
+    try:
+        connection.rollback()
+    except Exception:
+        return
+
+
+def _safe_error_message(error: Exception) -> str:
+    """Return a sanitized one-line error message."""
+    message = str(error).splitlines()[0] or error.__class__.__name__
+
+    if SUPABASE_DATABASE_URL:
+        message = message.replace(SUPABASE_DATABASE_URL, "[REDACTED]")
+
+    return str(_redact_sensitive(message))
+
+
+def _format_optional_count(value: Any) -> str:
+    """Format table counts where None means unavailable."""
+    if value is None:
+        return "Not available"
+
+    return str(value)
+
+
+def _format_latest_alert_history(records: list[dict]) -> list[str]:
+    """Format concise latest alert_history rows."""
+    if not records:
+        return ["- None"]
+
+    return [
+        " | ".join(
+            [
+                f"- {_format_field(record.get('created_at'))}",
+                _format_field(record.get("symbol")),
+                _format_field(record.get("alert_type")),
+                f"score={_format_field(record.get('opportunity_score'))}",
+                f"telegram_sent={_format_bool_field(record.get('telegram_sent'))}",
+                (
+                    "paper_trade_created="
+                    f"{_format_bool_field(record.get('paper_trade_created'))}"
+                ),
+                (
+                    "skip_reason="
+                    f"{_format_field(record.get('paper_trade_skip_reason'))}"
+                ),
+                f"scan_run_id={_format_field(record.get('scan_run_id'))}",
+            ]
+        )
+        for record in records[:5]
+    ]
+
+
+def _format_latest_scan_runs(records: list[dict]) -> list[str]:
+    """Format concise latest scan_runs rows."""
+    if not records:
+        return ["- None"]
+
+    return [
+        " | ".join(
+            [
+                f"- {_format_field(record.get('started_at'))}",
+                f"status={_format_field(record.get('status'))}",
+                f"universe={_format_field(record.get('total_scan_universe'))}",
+                f"alerts={_format_field(record.get('total_alert_candidates'))}",
+                (
+                    "created="
+                    f"{_format_field(record.get('total_paper_trades_created'))}"
+                ),
+                (
+                    "skipped="
+                    f"{_format_field(record.get('total_paper_trades_skipped'))}"
+                ),
+            ]
+        )
+        for record in records[:5]
+    ]
+
+
+def _format_latest_paper_trade_decisions(records: list[dict]) -> list[str]:
+    """Format concise latest paper_trade_decisions rows."""
+    if not records:
+        return ["- None"]
+
+    return [
+        " | ".join(
+            [
+                f"- {_format_field(record.get('created_at'))}",
+                _format_field(record.get("symbol")),
+                _format_field(record.get("alert_type")),
+                f"decision={_format_field(record.get('decision'))}",
+                f"eligible={_format_bool_field(record.get('eligible'))}",
+                f"reason={_format_field(record.get('reason'))}",
+            ]
+        )
+        for record in records[:5]
+    ]
+
+
+def _format_field(value: Any) -> str:
+    """Format one compact health-check field with redaction."""
+    if value is None:
+        return "-"
+
+    return str(_redact_sensitive(value))
+
+
+def _format_bool_field(value: Any) -> str:
+    """Format bool-ish health-check fields in lowercase."""
+    if value is None:
+        return "-"
+
+    return str(bool(value)).lower()
+
+
+def _normalize_record(record: dict) -> dict:
+    """Convert DB row values into JSON-friendly values."""
+    return {
+        key: _normalize_value(value)
+        for key, value in record.items()
+    }
+
+
+def _normalize_value(value: Any) -> Any:
+    """Convert common database values into plain Python values."""
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+
+    if isinstance(value, Decimal):
+        return float(value)
+
+    if isinstance(value, dict):
+        return {
+            key: _normalize_value(nested_value)
+            for key, nested_value in value.items()
+        }
+
+    if isinstance(value, list):
+        return [_normalize_value(item) for item in value]
+
+    return value
+
+
+def _redact_sensitive(value: Any) -> Any:
+    """Redact likely secret values based on key names."""
+    if isinstance(value, dict):
+        redacted = {}
+
+        for key, nested_value in value.items():
+            key_text = str(key).lower()
+
+            if any(part in key_text for part in SENSITIVE_KEY_PARTS):
+                redacted[key] = "[REDACTED]"
+            else:
+                redacted[key] = _redact_sensitive(nested_value)
+
+        return redacted
+
+    if isinstance(value, list):
+        return [_redact_sensitive(item) for item in value]
+
+    if isinstance(value, str) and SUPABASE_DATABASE_URL:
+        return value.replace(SUPABASE_DATABASE_URL, "[REDACTED]")
+
+    return value
+
+
 def _to_iso(value: Any) -> Any:
     """Convert date/time values to ISO strings for JSON-friendly records."""
     if isinstance(value, (datetime, date)):
@@ -1001,3 +1992,16 @@ def _as_json_value(value: Any) -> Any:
         return value
 
     return dict(value)
+
+
+def _json_param(value: Any) -> Any:
+    """Wrap JSON values for psycopg2 while keeping tests dependency-light."""
+    if Json is None:
+        return value
+
+    return Json(value)
+
+
+def _utc_now_iso() -> str:
+    """Return the current UTC timestamp as ISO text."""
+    return datetime.now(timezone.utc).isoformat()

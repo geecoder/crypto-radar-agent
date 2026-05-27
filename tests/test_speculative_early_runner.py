@@ -159,12 +159,16 @@ def test_speculative_paper_trade_created_only_when_plan_allows(
     monkeypatch.setattr(paper_trading, "PAPER_TRADES_FILE", str(trades_file))
     monkeypatch.setattr(paper_trading, "PAPER_TRADE_EVENTS_FILE", str(events_file))
 
-    created = create_paper_trades_from_alerts([eligible, rejected])
+    decisions = create_paper_trades_from_alerts([eligible, rejected])
     saved_trades = json.loads(trades_file.read_text(encoding="utf-8"))
 
     assert eligible["trade_plan"]["should_paper_trade"] is True
     assert rejected["trade_plan"]["should_paper_trade"] is False
-    assert len(created) == 1
+    assert len(decisions) == 2
+    assert decisions[0]["decision"] == "created"
+    assert decisions[0]["paper_trade_created"] is True
+    assert decisions[1]["decision"] == "ineligible"
+    assert decisions[1]["paper_trade_created"] is False
     assert saved_trades[0]["strategy_name"] == "speculative_early_runner_paper"
     assert saved_trades[0]["alert_type"] == "Speculative Early Runner Alert"
     assert saved_trades[0]["trade_plan_type"] == "speculative_early_runner"

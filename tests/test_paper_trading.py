@@ -180,15 +180,89 @@ def test_create_paper_trades_from_alerts_saves_json_fallback(
     monkeypatch.setattr(paper_trading, "PAPER_TRADES_FILE", str(trades_file))
     monkeypatch.setattr(paper_trading, "PAPER_TRADE_EVENTS_FILE", str(events_file))
 
-    created = paper_trading.create_paper_trades_from_alerts([_eligible_alert()])
+    decisions = paper_trading.create_paper_trades_from_alerts([_eligible_alert()])
 
     saved_trades = json.loads(trades_file.read_text(encoding="utf-8"))
     saved_events = json.loads(events_file.read_text(encoding="utf-8"))
 
-    assert len(created) == 1
-    assert saved_trades[0]["id"] == created[0]["id"]
-    assert saved_events[0]["trade_id"] == created[0]["id"]
+    assert len(decisions) == 1
+    assert decisions[0]["decision"] == "created"
+    assert decisions[0]["paper_trade_created"] is True
+    assert saved_trades[0]["id"] == decisions[0]["paper_trade_id"]
+    assert saved_events[0]["trade_id"] == decisions[0]["paper_trade_id"]
     assert saved_events[0]["type"] == "opened"
+
+
+def test_create_paper_trades_persists_created_and_skipped_decisions(
+    monkeypatch,
+) -> None:
+    inserted_trades = []
+    inserted_events = []
+    inserted_decisions = []
+    updated_alerts = []
+    eligible = {
+        **_eligible_alert(),
+        "alert_history_id": "alert-history-1",
+        "source_alert_id": "source-alert-1",
+    }
+    rejected = {
+        **_eligible_alert(),
+        "id": "source-alert-2",
+        "alert_history_id": "alert-history-2",
+    }
+    rejected["opportunity"] = {
+        **rejected["opportunity"],
+        "opportunity_score": 10,
+    }
+
+    monkeypatch.setattr(paper_trading, "USE_SUPABASE", True)
+    monkeypatch.setattr(paper_trading, "_get_open_paper_trades", lambda: [])
+    monkeypatch.setattr(
+        paper_trading.supabase_store,
+        "insert_paper_trade",
+        inserted_trades.append,
+    )
+    monkeypatch.setattr(
+        paper_trading.supabase_store,
+        "insert_paper_trade_event",
+        inserted_events.append,
+    )
+    monkeypatch.setattr(
+        paper_trading.supabase_store,
+        "insert_paper_trade_decision",
+        inserted_decisions.append,
+    )
+    monkeypatch.setattr(
+        paper_trading.supabase_store,
+        "update_alert_paper_trade_status",
+        lambda alert_id, created, paper_trade_id, skip_reason: updated_alerts.append(
+            (alert_id, created, paper_trade_id, skip_reason)
+        ),
+    )
+
+    decisions = paper_trading.create_paper_trades_from_alerts([eligible, rejected])
+
+    assert [decision["decision"] for decision in decisions] == [
+        "created",
+        "ineligible",
+    ]
+    assert len(inserted_trades) == 1
+    assert inserted_trades[0]["alert_history_id"] == "alert-history-1"
+    assert inserted_trades[0]["source_alert_id"] == "source-alert-1"
+    assert len(inserted_events) == 1
+    assert len(inserted_decisions) == 2
+    assert inserted_decisions[0]["decision"] == "created"
+    assert inserted_decisions[0]["paper_trade_id"] == inserted_trades[0]["id"]
+    assert inserted_decisions[1]["decision"] == "ineligible"
+    assert updated_alerts[0] == (
+        "alert-history-1",
+        True,
+        inserted_trades[0]["id"],
+        None,
+    )
+    assert updated_alerts[1][0] == "alert-history-2"
+    assert updated_alerts[1][1] is False
+    assert "below 65" in updated_alerts[1][3]
 
 
 def test_evaluate_open_paper_trade_stop_loss() -> None:

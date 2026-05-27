@@ -16,6 +16,8 @@ jobs:
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
       TELEGRAM_ALERTS_ENABLED: ${{ secrets.TELEGRAM_ALERTS_ENABLED }}
       BINANCE_BASE_URL_ORDER: data-api,api1,api2,api3,api
+      SUPABASE_DATABASE_URL: ${{ secrets.SUPABASE_DATABASE_URL }}
+      PERSISTENCE_BACKEND: supabase
 
     steps:
       - name: Check out repository

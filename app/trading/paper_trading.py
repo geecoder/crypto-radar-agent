@@ -56,6 +56,8 @@ def build_paper_trade_from_alert(
     return {
         "id": f"paper_{symbol}_{timestamp}",
         "alert_id": _first_present(result, "alert_id", "id"),
+        "alert_history_id": _first_present(result, "alert_history_id", "alert_id"),
+        "source_alert_id": _first_present(result, "source_alert_id", "id"),
         "strategy_name": strategy.name,
         "symbol": symbol,
         "alert_type": _get_alert_type(result),
@@ -240,54 +242,155 @@ def create_paper_trades_from_alerts(
     alert_candidates: list[dict],
     strategy: PaperTradingStrategy | None = None,
 ) -> list[dict]:
-    """Create and persist simulated paper trades for eligible alerts."""
+    """Create paper trades and return one structured decision per alert."""
     strategy = strategy or get_default_paper_trading_strategy()
-    created_trades = []
+    decisions = []
+    open_trade_symbols = {
+        str(trade.get("symbol"))
+        for trade in _get_open_paper_trades()
+        if trade.get("symbol") and trade.get("status") == "open"
+    }
 
     for candidate in alert_candidates:
         alert_type = _get_alert_type(candidate)
+        selected_strategy = strategy
+        eligible = False
+        reason = "Paper trade skipped."
+        candidate_for_trade = candidate
 
         if alert_type == PARABOLIC_WATCH_ALERT_TYPE:
-            parabolic_strategy = get_parabolic_paper_strategy()
-            should_create, reason = should_create_parabolic_paper_trade(
+            selected_strategy = get_parabolic_paper_strategy()
+            eligible, reason = should_create_parabolic_paper_trade(
                 candidate,
-                parabolic_strategy,
+                selected_strategy,
             )
 
-            if not should_create:
-                continue
-
-            candidate = _with_parabolic_trade_plan(candidate, parabolic_strategy, reason)
-            trade = build_paper_trade_from_alert(candidate, parabolic_strategy)
-            _insert_paper_trade(trade)
-            _insert_paper_trade_event(_build_trade_event(trade, "opened"))
-            created_trades.append(trade)
-            continue
-
-        if alert_type == SPECULATIVE_EARLY_RUNNER_ALERT_TYPE:
+            if eligible:
+                candidate_for_trade = _with_parabolic_trade_plan(
+                    candidate,
+                    selected_strategy,
+                    reason,
+                )
+        elif alert_type == SPECULATIVE_EARLY_RUNNER_ALERT_TYPE:
             trade_plan = _get_trade_plan(candidate)
+            selected_strategy = get_speculative_early_runner_strategy()
+            eligible = bool(trade_plan.get("should_paper_trade", False))
+            reason = (
+                trade_plan.get("speculative_paper_reason")
+                or trade_plan.get("reason")
+                or (
+                    "Speculative early runner trade plan allows paper trading."
+                    if eligible
+                    else "Trade plan does not allow paper trading."
+                )
+            )
+        else:
+            eligible, reason = should_create_paper_trade(candidate, strategy)
 
-            if not trade_plan.get("should_paper_trade", False):
-                continue
+        symbol = str(candidate.get("symbol") or "UNKNOWN")
+        trade_plan = _get_trade_plan(candidate_for_trade)
+        trade_plan_type = _get_trade_plan_type(candidate_for_trade, trade_plan)
+        decision = _build_paper_trade_decision(
+            candidate,
+            eligible=eligible,
+            decision="created" if eligible else "ineligible",
+            reason=reason,
+            strategy=selected_strategy,
+            trade_plan_type=trade_plan_type,
+        )
 
-            speculative_strategy = get_speculative_early_runner_strategy()
-            trade = build_paper_trade_from_alert(candidate, speculative_strategy)
-            _insert_paper_trade(trade)
-            _insert_paper_trade_event(_build_trade_event(trade, "opened"))
-            created_trades.append(trade)
+        if not eligible:
+            _persist_paper_trade_decision(decision)
+            _update_alert_paper_trade_status(decision)
+            decisions.append(decision)
             continue
 
-        should_create, _reason = should_create_paper_trade(candidate, strategy)
-
-        if not should_create:
+        if symbol in open_trade_symbols:
+            decision.update(
+                {
+                    "paper_trade_created": False,
+                    "paper_trade_id": None,
+                    "decision": "duplicate",
+                    "reason": f"Duplicate open paper trade exists for {symbol}.",
+                }
+            )
+            _persist_paper_trade_decision(decision)
+            _update_alert_paper_trade_status(decision)
+            decisions.append(decision)
             continue
 
-        trade = build_paper_trade_from_alert(candidate, strategy)
+        trade = build_paper_trade_from_alert(candidate_for_trade, selected_strategy)
         _insert_paper_trade(trade)
         _insert_paper_trade_event(_build_trade_event(trade, "opened"))
-        created_trades.append(trade)
+        open_trade_symbols.add(symbol)
+        decision.update(
+            {
+                "paper_trade_created": True,
+                "paper_trade_id": trade.get("id"),
+                "decision": "created",
+                "reason": reason,
+            }
+        )
+        _persist_paper_trade_decision(decision)
+        _update_alert_paper_trade_status(decision)
+        decisions.append(decision)
 
-    return created_trades
+    return decisions
+
+
+def _build_paper_trade_decision(
+    result: dict,
+    eligible: bool,
+    decision: str,
+    reason: str,
+    strategy: PaperTradingStrategy,
+    trade_plan_type: str | None,
+) -> dict:
+    """Build a structured paper-trade decision for one alert candidate."""
+    alert_history_id = _first_present(result, "alert_history_id", "alert_id")
+
+    return {
+        "symbol": str(result.get("symbol") or "UNKNOWN"),
+        "alert_type": _get_alert_type(result),
+        "alert_history_id": alert_history_id,
+        "paper_trade_created": False,
+        "paper_trade_id": None,
+        "decision": decision,
+        "eligible": bool(eligible),
+        "reason": reason,
+        "strategy_name": strategy.name if strategy else None,
+        "trade_plan_type": trade_plan_type,
+        "metadata": {
+            "source_alert_id": _first_present(result, "source_alert_id", "id"),
+            "opportunity_score": _get_opportunity_value(
+                result,
+                "opportunity_score",
+            ),
+            "scan_run_id": result.get("scan_run_id"),
+            "trade_plan": _get_trade_plan(result),
+        },
+    }
+
+
+def _persist_paper_trade_decision(decision: dict) -> None:
+    """Persist a paper-trade decision when Supabase is enabled."""
+    if not USE_SUPABASE:
+        return
+
+    supabase_store.insert_paper_trade_decision(decision)
+
+
+def _update_alert_paper_trade_status(decision: dict) -> None:
+    """Update alert_history with the paper-trade decision when available."""
+    if not USE_SUPABASE:
+        return
+
+    supabase_store.update_alert_paper_trade_status(
+        decision.get("alert_history_id"),
+        bool(decision.get("paper_trade_created")),
+        decision.get("paper_trade_id"),
+        None if decision.get("paper_trade_created") else decision.get("reason"),
+    )
 
 
 def evaluate_open_paper_trade(trade: dict, candles_df) -> dict:

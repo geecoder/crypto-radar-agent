@@ -332,6 +332,51 @@ def test_main_prints_symbol_diagnostic_and_exits(monkeypatch, capsys) -> None:
     assert "Symbol: ENJUSDT" in output
 
 
+def test_parse_args_accepts_persistence_health_check(monkeypatch) -> None:
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["python -m app.main", "--persistence-health-check"],
+    )
+
+    args = app_main.parse_args()
+
+    assert args.persistence_health_check is True
+
+
+def test_main_prints_persistence_health_check_and_exits(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["python -m app.main", "--persistence-health-check"],
+    )
+    monkeypatch.setattr(
+        app_main,
+        "persistence_health_check",
+        lambda: {"backend": "json"},
+    )
+    monkeypatch.setattr(
+        app_main,
+        "format_persistence_health_check",
+        lambda report: f"Persistence Health Check\nBackend: {report['backend']}",
+    )
+    monkeypatch.setattr(
+        app_main,
+        "scan_symbols",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("Scanner should not run in persistence-health-check mode.")
+        ),
+    )
+
+    app_main.main()
+
+    output = capsys.readouterr().out
+
+    assert "Crypto Radar Agent started" in output
+    assert "Persistence Health Check" in output
+    assert "Backend: json" in output
+
+
 def test_main_passes_selected_paper_strategy_to_trade_creation(monkeypatch) -> None:
     captured_strategy_names = []
     candidate = {
@@ -389,6 +434,128 @@ def test_main_passes_selected_paper_strategy_to_trade_creation(monkeypatch) -> N
     app_main.main()
 
     assert captured_strategy_names == ["conservative_momentum"]
+
+
+def test_main_creates_scan_run_and_links_alert_history_when_supabase_enabled(
+    monkeypatch,
+) -> None:
+    created_scan_runs = []
+    completed_scan_runs = []
+    telegram_updates = []
+    alert_history_payloads = []
+    paper_trade_candidates = []
+    candidate = {
+        "id": "source-alert-1",
+        "symbol": "BTCUSDT",
+        "latest_close": 100.0,
+        "recent_price_changes": {"change_1h_pct": 2},
+        "volume_acceleration": {"volume_acceleration_1h_ratio": 1.4},
+        "trade_plan": {
+            "trade_plan_type": "standard_continuation",
+            "should_paper_trade": True,
+        },
+        "opportunity": {
+            "opportunity_score": 72,
+            "classification": "Watchlist",
+            "target_bucket": "+20% momentum setup",
+            "risk_level": "Medium",
+            "summary": "Watchlist. Some signals are improving.",
+        },
+    }
+    fake_client = SimpleNamespace(
+        get_exchange_info=lambda: {"symbols": []},
+        get_24hr_tickers=lambda: [],
+    )
+
+    monkeypatch.setattr(sys, "argv", ["python -m app.main"])
+    monkeypatch.setattr(app_main, "USE_SUPABASE", True)
+    monkeypatch.setattr(app_main, "BinancePublicClient", lambda: fake_client)
+    monkeypatch.setattr(app_main, "get_active_usdt_symbols", lambda exchange_info: ["BTCUSDT"])
+    monkeypatch.setattr(
+        app_main,
+        "select_scan_universe",
+        lambda active_symbols, tickers_24hr, max_priority_symbols=50, max_universe_symbols=150: ["BTCUSDT"],
+    )
+    monkeypatch.setattr(
+        app_main,
+        "scan_symbols",
+        lambda client, symbols, interval="15m", limit=100, max_symbols=50, tickers_24hr=None: [candidate],
+    )
+    monkeypatch.setattr(app_main, "should_send_alert", lambda symbol, score: (True, "ok"))
+    monkeypatch.setattr(app_main, "send_telegram_message", lambda message: True)
+    monkeypatch.setattr(app_main, "record_alert", lambda symbol, score: None)
+    monkeypatch.setattr(
+        app_main,
+        "create_scan_run",
+        lambda metadata: created_scan_runs.append(metadata) or "scan-1",
+    )
+    monkeypatch.setattr(
+        app_main,
+        "complete_scan_run",
+        lambda scan_run_id, summary: completed_scan_runs.append(
+            (scan_run_id, summary)
+        ),
+    )
+    monkeypatch.setattr(
+        app_main,
+        "update_alert_telegram_status",
+        lambda alert_id, sent, error: telegram_updates.append(
+            (alert_id, sent, error)
+        ),
+    )
+
+    def fake_append_alert_history(result, telegram_sent):
+        alert_history_payloads.append((result, telegram_sent))
+        return {"id": "alert-history-1"}
+
+    def fake_create_paper_trades_from_alerts(candidates, strategy=None):
+        paper_trade_candidates.extend(candidates)
+        return [
+            {
+                "symbol": "BTCUSDT",
+                "paper_trade_created": True,
+                "paper_trade_id": "paper-1",
+                "decision": "created",
+            }
+        ]
+
+    monkeypatch.setattr(app_main, "append_alert_history", fake_append_alert_history)
+    monkeypatch.setattr(
+        app_main,
+        "create_paper_trades_from_alerts",
+        fake_create_paper_trades_from_alerts,
+    )
+
+    app_main.main()
+
+    assert created_scan_runs[0]["run_source"] == "local"
+    assert created_scan_runs[0]["paper_strategy"] == "default_momentum_continuation"
+    assert completed_scan_runs == [
+        (
+            "scan-1",
+            {
+                "total_active_symbols": 1,
+                "total_scan_universe": 1,
+                "total_alert_candidates": 1,
+                "total_telegram_sent": 1,
+                "total_paper_trades_created": 1,
+                "total_paper_trades_skipped": 0,
+                "status": "completed",
+            },
+        )
+    ]
+    persisted_alert, telegram_sent = alert_history_payloads[0]
+    assert persisted_alert["scan_run_id"] == "scan-1"
+    assert persisted_alert["recent_price_changes"] == {"change_1h_pct": 2}
+    assert persisted_alert["volume_acceleration"] == {
+        "volume_acceleration_1h_ratio": 1.4
+    }
+    assert persisted_alert["trade_plan"]["trade_plan_type"] == "standard_continuation"
+    assert telegram_sent is False
+    assert paper_trade_candidates[0]["alert_history_id"] == "alert-history-1"
+    assert paper_trade_candidates[0]["source_alert_id"] == "source-alert-1"
+    assert paper_trade_candidates[0]["scan_run_id"] == "scan-1"
+    assert telegram_updates == [("alert-history-1", True, None)]
 
 
 def test_main_sends_alert_message_when_candidates_exist(monkeypatch, capsys) -> None:
@@ -457,7 +624,7 @@ def test_main_sends_alert_message_when_candidates_exist(monkeypatch, capsys) -> 
     assert "Crypto Radar Alert Candidates" in sent_messages[0]
     assert "BTCUSDT" in sent_messages[0]
     assert recorded_alerts == [("BTCUSDT", 72)]
-    assert alert_history_records == [("BTCUSDT", True)]
+    assert alert_history_records == [("BTCUSDT", False)]
 
 
 def test_main_skips_paper_trade_for_parabolic_watch_alert(monkeypatch, capsys) -> None:
@@ -694,6 +861,6 @@ def test_main_suppresses_alert_candidates_during_cooldown(monkeypatch, capsys) -
 
     assert sent_messages == []
     assert recorded_alerts == []
-    assert alert_history_records == []
+    assert alert_history_records == [("BTCUSDT", False)]
     assert "BTCUSDT: Duplicate alert suppressed during cooldown." in output
     assert "Alert candidates found, but all were suppressed by cooldown." in output

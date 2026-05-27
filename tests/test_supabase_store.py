@@ -49,6 +49,89 @@ class FakeConnection:
         self.closed = True
 
 
+class MissingTableError(Exception):
+    """Small exception double for missing-table health-check tests."""
+
+
+class HealthCursor:
+    """Cursor double for persistence health-check queries."""
+
+    def __init__(self, connection) -> None:
+        self.connection = connection
+        self.rows = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback) -> None:
+        return None
+
+    def execute(self, query: str, params=None) -> None:
+        self.connection.queries.append(query)
+        self.connection.params.append(params)
+        normalized_query = " ".join(query.lower().split())
+        table_name = params[0] if params else None
+
+        if "from scan_runs" in normalized_query:
+            raise MissingTableError('relation "scan_runs" does not exist')
+
+        if "from paper_trade_decisions" in normalized_query:
+            raise MissingTableError(
+                'relation "paper_trade_decisions" does not exist'
+            )
+
+        if "information_schema.columns" in normalized_query:
+            if table_name == "alert_history":
+                self.rows = [{"column_name": "created_at"}]
+            else:
+                self.rows = []
+            return
+
+        if "count(*)" in normalized_query:
+            self.rows = [{"record_count": 2}]
+            return
+
+        if "from alert_history" in normalized_query:
+            self.rows = [
+                {
+                    "id": "alert-1",
+                    "symbol": "BTCUSDT",
+                    "created_at": datetime(2026, 5, 27, tzinfo=timezone.utc),
+                }
+            ]
+            return
+
+        self.rows = []
+
+    def fetchone(self):
+        if not self.rows:
+            return None
+
+        return self.rows[0]
+
+    def fetchall(self):
+        return self.rows
+
+
+class HealthConnection:
+    """Connection double for persistence health-check queries."""
+
+    def __init__(self) -> None:
+        self.queries = []
+        self.params = []
+        self.closed = False
+        self.rollback_count = 0
+
+    def cursor(self, cursor_factory=None):
+        return HealthCursor(self)
+
+    def rollback(self) -> None:
+        self.rollback_count += 1
+
+    def close(self) -> None:
+        self.closed = True
+
+
 def _paper_trade_row() -> dict:
     opened_at = datetime(2026, 5, 17, 12, 0, tzinfo=timezone.utc)
     updated_at = datetime(2026, 5, 17, 12, 1, tzinfo=timezone.utc)
@@ -205,6 +288,213 @@ def test_load_paper_trades_maps_structured_columns_and_limit(monkeypatch) -> Non
     assert trades[0]["symbol"] == "BTCUSDT"
     assert trades[0]["created_at"] == "2026-05-17T12:00:00+00:00"
     assert trades[0]["updated_at"] == "2026-05-17T12:01:00+00:00"
+
+
+def test_insert_alert_history_writes_stage37_columns(monkeypatch) -> None:
+    fake_connection = FakeConnection([])
+
+    monkeypatch.setattr(supabase_store, "get_connection", lambda: fake_connection)
+
+    supabase_store.insert_alert_history(
+        {
+            "id": "alert-history-1",
+            "symbol": "BTCUSDT",
+            "alert_type": "Continuation Alert",
+            "recent_price_changes": {"change_1h_pct": 2},
+            "volume_acceleration": {"volume_acceleration_1h_ratio": 1.4},
+            "trade_plan": {"trade_plan_type": "standard_continuation"},
+            "trade_plan_type": "standard_continuation",
+            "should_paper_trade": True,
+            "scan_run_id": "scan-1",
+            "source": "scanner",
+        }
+    )
+
+    query = fake_connection.queries[0]
+    params = fake_connection.params[0]
+
+    assert "alert_type" in query
+    assert "recent_price_changes" in query
+    assert "volume_acceleration" in query
+    assert "trade_plan" in query
+    assert "trade_plan_type" in query
+    assert "should_paper_trade" in query
+    assert "scan_run_id" in query
+    assert "Continuation Alert" in params
+    assert "standard_continuation" in params
+    assert "scan-1" in params
+    assert fake_connection.closed is True
+
+
+def test_insert_paper_trade_writes_alert_history_link(monkeypatch) -> None:
+    fake_connection = FakeConnection([])
+
+    monkeypatch.setattr(supabase_store, "get_connection", lambda: fake_connection)
+
+    supabase_store.insert_paper_trade(
+        {
+            "id": "paper-1",
+            "alert_id": "alert-history-1",
+            "alert_history_id": "alert-history-1",
+            "source_alert_id": "source-alert-1",
+            "strategy_name": "default_momentum_continuation",
+            "symbol": "BTCUSDT",
+        }
+    )
+
+    query = fake_connection.queries[0]
+    params = fake_connection.params[0]
+
+    assert "alert_history_id" in query
+    assert "source_alert_id" in query
+    assert "alert-history-1" in params
+    assert "source-alert-1" in params
+    assert fake_connection.closed is True
+
+
+def test_format_persistence_health_check_does_not_expose_secrets(monkeypatch) -> None:
+    secret_url = "postgres://user:secret@example.supabase.co/db"
+    monkeypatch.setattr(supabase_store, "SUPABASE_DATABASE_URL", secret_url)
+
+    formatted = supabase_store.format_persistence_health_check(
+        {
+            "backend": "supabase",
+            "supabase_url_configured": True,
+            "connection_ok": True,
+            "counts": {
+                "alert_history": 1,
+                "paper_trades": 0,
+                "alert_outcomes": 0,
+                "scan_runs": None,
+                "paper_trade_decisions": None,
+            },
+            "latest_alert_history": [
+                {
+                    "id": "alert-1",
+                    "symbol": "BTCUSDT",
+                    "alert_type": "Continuation Alert",
+                    "SUPABASE_DATABASE_URL": secret_url,
+                }
+            ],
+            "latest_scan_runs": [],
+            "latest_paper_trade_decisions": [],
+            "warnings": [f"Connection retried with {secret_url}"],
+        }
+    )
+
+    assert secret_url not in formatted
+    assert "[REDACTED]" in formatted
+    assert "BTCUSDT" in formatted
+
+
+def test_persistence_health_check_reports_missing_stage37_tables(
+    monkeypatch,
+) -> None:
+    fake_connection = HealthConnection()
+
+    monkeypatch.setattr(supabase_store, "PERSISTENCE_BACKEND", "supabase")
+    monkeypatch.setattr(supabase_store, "SUPABASE_DATABASE_URL", "postgres://secret")
+    monkeypatch.setattr(supabase_store, "get_connection", lambda: fake_connection)
+
+    report = supabase_store.persistence_health_check()
+
+    assert report["backend"] == "supabase"
+    assert report["supabase_url_configured"] is True
+    assert report["connection_ok"] is True
+    assert report["counts"]["alert_history"] == 2
+    assert report["counts"]["scan_runs"] is None
+    assert report["counts"]["paper_trade_decisions"] is None
+    assert report["latest_alert_history"][0]["symbol"] == "BTCUSDT"
+    assert (
+        "Table missing: scan_runs. Run the Stage 37 Supabase SQL migration."
+        in report["warnings"]
+    )
+    assert (
+        "Table missing: paper_trade_decisions. Run the Stage 37 Supabase SQL migration."
+        in report["warnings"]
+    )
+    assert fake_connection.rollback_count >= 2
+    assert fake_connection.closed is True
+
+
+def test_persistence_health_check_handles_connection_failure_gracefully(
+    monkeypatch,
+) -> None:
+    secret_url = "postgres://user:secret@example.supabase.co/db"
+
+    monkeypatch.setattr(supabase_store, "PERSISTENCE_BACKEND", "supabase")
+    monkeypatch.setattr(supabase_store, "SUPABASE_DATABASE_URL", secret_url)
+
+    def fail_connection():
+        raise RuntimeError(f"could not connect to {secret_url}")
+
+    monkeypatch.setattr(supabase_store, "get_connection", fail_connection)
+
+    report = supabase_store.persistence_health_check()
+    formatted = supabase_store.format_persistence_health_check(report)
+
+    assert report["connection_ok"] is False
+    assert report["counts"]["alert_history"] is None
+    assert any("Supabase connection failed" in warning for warning in report["warnings"])
+    assert secret_url not in formatted
+    assert "[REDACTED]" in formatted
+
+
+def test_health_check_formatter_uses_concise_rows() -> None:
+    formatted = supabase_store.format_persistence_health_check(
+        {
+            "backend": "supabase",
+            "supabase_url_configured": True,
+            "connection_ok": True,
+            "counts": {
+                "alert_history": 1,
+                "paper_trades": 1,
+                "alert_outcomes": 0,
+                "scan_runs": 1,
+                "paper_trade_decisions": 1,
+            },
+            "latest_alert_history": [
+                {
+                    "created_at": "2026-05-27T12:00:00+00:00",
+                    "symbol": "BTCUSDT",
+                    "alert_type": "Continuation Alert",
+                    "opportunity_score": 72,
+                    "telegram_sent": True,
+                    "paper_trade_created": False,
+                    "paper_trade_skip_reason": "Score too low",
+                    "scan_run_id": "scan-1",
+                    "trade_plan": {"large": "json"},
+                }
+            ],
+            "latest_scan_runs": [
+                {
+                    "started_at": "2026-05-27T12:00:00+00:00",
+                    "status": "completed",
+                    "total_scan_universe": 150,
+                    "total_alert_candidates": 3,
+                    "total_paper_trades_created": 1,
+                    "total_paper_trades_skipped": 2,
+                }
+            ],
+            "latest_paper_trade_decisions": [
+                {
+                    "created_at": "2026-05-27T12:01:00+00:00",
+                    "symbol": "BTCUSDT",
+                    "alert_type": "Continuation Alert",
+                    "decision": "skipped",
+                    "eligible": False,
+                    "reason": "Score too low",
+                }
+            ],
+            "warnings": [],
+        }
+    )
+
+    assert "BTCUSDT | Continuation Alert | score=72" in formatted
+    assert "status=completed | universe=150 | alerts=3" in formatted
+    assert "decision=skipped | eligible=false | reason=Score too low" in formatted
+    assert "trade_plan" not in formatted
+    assert '{"large": "json"}' not in formatted
 
 
 def test_supabase_store_does_not_select_record_column() -> None:

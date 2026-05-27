@@ -58,22 +58,23 @@ def test_parabolic_watch_alert_eligible_case_creates_paper_trade(
     monkeypatch.setattr(paper_trading, "PAPER_TRADE_EVENTS_FILE", str(events_file))
 
     should_create, reason = should_create_parabolic_paper_trade(_parabolic_alert())
-    created = create_paper_trades_from_alerts([_parabolic_alert()])
+    decisions = create_paper_trades_from_alerts([_parabolic_alert()])
     saved_trades = json.loads(trades_file.read_text(encoding="utf-8"))
 
     assert should_create is True
     assert reason == "Parabolic paper trade eligible."
-    assert len(created) == 1
-    assert saved_trades[0]["id"] == created[0]["id"]
-    assert created[0]["strategy_name"] == "parabolic_continuation_paper"
-    assert created[0]["alert_type"] == "Parabolic Watch Alert"
-    assert created[0]["trade_plan_type"] == "parabolic_high_risk_paper"
-    assert created[0]["simulated_position_size"] == 25
-    assert created[0]["stop_loss_pct"] == -8
-    assert created[0]["take_profit_1_pct"] == 12
-    assert created[0]["take_profit_2_pct"] == 25
-    assert created[0]["take_profit_3_pct"] == 50
-    assert created[0]["max_hold_hours"] == 24
+    assert len(decisions) == 1
+    assert decisions[0]["decision"] == "created"
+    assert saved_trades[0]["id"] == decisions[0]["paper_trade_id"]
+    assert decisions[0]["strategy_name"] == "parabolic_continuation_paper"
+    assert decisions[0]["alert_type"] == "Parabolic Watch Alert"
+    assert decisions[0]["trade_plan_type"] == "parabolic_high_risk_paper"
+    assert saved_trades[0]["simulated_position_size"] == 25
+    assert saved_trades[0]["stop_loss_pct"] == -8
+    assert saved_trades[0]["take_profit_1_pct"] == 12
+    assert saved_trades[0]["take_profit_2_pct"] == 25
+    assert saved_trades[0]["take_profit_3_pct"] == 50
+    assert saved_trades[0]["max_hold_hours"] == 24
 
 
 def test_parabolic_rejected_when_move_too_extended_above_150_pct() -> None:
