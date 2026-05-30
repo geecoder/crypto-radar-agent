@@ -41,6 +41,15 @@ SPECULATIVE_EARLY_RUNNER_TRADE_PLAN_TYPE = "speculative_early_runner"
 PARABOLIC_TRADE_PLAN_TYPE = "parabolic_high_risk_paper"
 PARABOLIC_MIN_24H_CHANGE_PCT = 40
 PARABOLIC_MIN_QUOTE_VOLUME = 5_000_000
+MAX_OPEN_PAPER_TRADES_BY_ALERT_TYPE = {
+    SPECULATIVE_EARLY_RUNNER_ALERT_TYPE: 5,
+    PARABOLIC_WATCH_ALERT_TYPE: 3,
+    "Continuation Alert": 10,
+}
+MAX_TOTAL_OPEN_PAPER_TRADES = 20
+MAX_HOLD_EXPIRED_EVENT_NOTES = (
+    "Closed stale paper trade because max_hold_hours was reached."
+)
 logger = get_logger(__name__)
 
 
@@ -240,6 +249,38 @@ def should_create_parabolic_paper_trade(
     return True, "Parabolic paper trade eligible."
 
 
+def can_create_more_trades_for_alert_type(
+    alert_type: str,
+    open_trades: list[dict],
+) -> tuple[bool, str]:
+    """Return whether concentration limits allow another open paper trade."""
+    active_open_trades = [
+        trade
+        for trade in open_trades
+        if isinstance(trade, dict)
+        and str(trade.get("status", "open")).lower() == "open"
+    ]
+
+    if len(active_open_trades) >= MAX_TOTAL_OPEN_PAPER_TRADES:
+        return False, "Total open paper trade limit reached."
+
+    limit = MAX_OPEN_PAPER_TRADES_BY_ALERT_TYPE.get(alert_type)
+
+    if limit is None:
+        return True, "Paper trade concentration limit allows this alert type."
+
+    current_count = sum(
+        1
+        for trade in active_open_trades
+        if str(trade.get("alert_type") or "") == alert_type
+    )
+
+    if current_count >= limit:
+        return False, f"Open trade limit reached for {alert_type}."
+
+    return True, "Paper trade concentration limit allows this alert type."
+
+
 def create_paper_trades_from_alerts(
     alert_candidates: list[dict],
     strategy: PaperTradingStrategy | None = None,
@@ -247,9 +288,10 @@ def create_paper_trades_from_alerts(
     """Create paper trades and return one structured decision per alert."""
     strategy = strategy or get_default_paper_trading_strategy()
     decisions = []
+    open_trades = _get_open_paper_trades()
     open_trade_symbols = {
         str(trade.get("symbol"))
-        for trade in _get_open_paper_trades()
+        for trade in open_trades
         if trade.get("symbol") and trade.get("status") == "open"
     }
 
@@ -307,6 +349,25 @@ def create_paper_trades_from_alerts(
             decisions.append(decision)
             continue
 
+        concentration_ok, concentration_reason = (
+            can_create_more_trades_for_alert_type(alert_type, open_trades)
+        )
+
+        if not concentration_ok:
+            decision.update(
+                {
+                    "paper_trade_created": False,
+                    "paper_trade_id": None,
+                    "decision": "skipped",
+                    "eligible": False,
+                    "reason": concentration_reason,
+                }
+            )
+            _persist_paper_trade_decision(decision)
+            _update_alert_paper_trade_status(decision)
+            decisions.append(decision)
+            continue
+
         if symbol in open_trade_symbols:
             decision.update(
                 {
@@ -325,6 +386,7 @@ def create_paper_trades_from_alerts(
         _insert_paper_trade(trade)
         _insert_paper_trade_event(_build_trade_event(trade, "opened"))
         open_trade_symbols.add(symbol)
+        open_trades.append(trade)
         decision.update(
             {
                 "paper_trade_created": True,
@@ -482,14 +544,18 @@ def evaluate_open_paper_trade(trade: dict, candles_df) -> dict:
 def update_open_paper_trades(client) -> dict:
     """Evaluate all open paper trades and persist any closures."""
     open_trades = _get_open_paper_trades()
-    closed_trades = 0
+    closed_stop_loss = 0
+    closed_take_profit = 0
+    closed_max_hold = 0
     still_open = 0
+    errors = 0
 
     for trade in open_trades:
         symbol = trade.get("symbol")
 
         if not symbol:
             still_open += 1
+            errors += 1
             continue
 
         try:
@@ -501,22 +567,36 @@ def update_open_paper_trades(client) -> dict:
                 updates = evaluate_open_paper_trade(trade, candles)
         except Exception:
             still_open += 1
+            errors += 1
             continue
 
         if updates.get("status") == "closed":
             _update_paper_trade(str(trade.get("id")), updates)
             closed_trade = {**trade, **updates}
-            _insert_paper_trade_event(_build_trade_event(closed_trade, "closed"))
-            if updates.get("exit_reason") == "max_hold_expired":
+            _insert_paper_trade_event(_build_close_event(closed_trade))
+            exit_reason = str(updates.get("exit_reason") or "")
+
+            if exit_reason == "max_hold_expired":
                 logger.info("Closed stale paper trade due to max hold: %s", symbol)
-            closed_trades += 1
+                closed_max_hold += 1
+            elif exit_reason.startswith("take_profit"):
+                closed_take_profit += 1
+            elif exit_reason == "stop_loss":
+                closed_stop_loss += 1
         else:
             still_open += 1
 
+    closed_trades = closed_stop_loss + closed_take_profit + closed_max_hold
+
     return {
+        "checked": len(open_trades),
         "open_trades_checked": len(open_trades),
         "closed_trades": closed_trades,
+        "closed_stop_loss": closed_stop_loss,
+        "closed_take_profit": closed_take_profit,
+        "closed_max_hold": closed_max_hold,
         "still_open": still_open,
+        "errors": errors,
     }
 
 
@@ -600,7 +680,7 @@ def _build_trade_event(trade: dict, event_type: str) -> dict:
     """Build a JSON-friendly paper trade event."""
     occurred_at = (
         trade.get("closed_at")
-        if event_type == "closed"
+        if event_type in {"closed", "max_hold_expired"}
         else trade.get("opened_at")
     ) or _utc_now_iso()
 
@@ -618,6 +698,16 @@ def _build_trade_event(trade: dict, event_type: str) -> dict:
             "pnl_amount": trade.get("pnl_amount"),
         },
     }
+
+
+def _build_close_event(trade: dict) -> dict:
+    """Build the correct close event for a paper trade closure."""
+    if trade.get("exit_reason") != "max_hold_expired":
+        return _build_trade_event(trade, "closed")
+
+    event = _build_trade_event(trade, "max_hold_expired")
+    event["notes"] = MAX_HOLD_EXPIRED_EVENT_NOTES
+    return event
 
 
 def _build_close_updates(
@@ -659,7 +749,7 @@ def _build_stale_paper_trade_updates(trade: dict, candles_df) -> dict | None:
     if latest_close is None:
         return None
 
-    closed_at = _row_timestamp(latest_candle) or datetime.now(timezone.utc)
+    closed_at = datetime.now(timezone.utc)
 
     return _build_close_updates(
         trade,

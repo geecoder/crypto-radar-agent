@@ -31,6 +31,31 @@ def _good_closed_trades(count: int = 100) -> list[dict]:
     return [_closed_trade(index, 2.0) for index in range(count)]
 
 
+def _healthy_alert_history(count: int = 100) -> list[dict]:
+    return [
+        {
+            "id": f"alert-{index}",
+            "telegram_sent": True,
+            "alerted_at": f"2026-05-{(index % 28) + 1:02d}T00:00:00+00:00",
+        }
+        for index in range(count)
+    ]
+
+
+def _passing_live_readiness_trades() -> list[dict]:
+    trades = _good_closed_trades(80)
+    trades.extend(
+        _closed_trade(
+            100 + index,
+            3.0,
+            strategy_name="speculative_early_runner_paper",
+        )
+        | {"alert_type": "Speculative Early Runner Alert"}
+        for index in range(20)
+    )
+    return trades
+
+
 def test_not_ready_when_closed_trades_below_100() -> None:
     report = build_live_readiness_report(
         _good_closed_trades(99),
@@ -87,6 +112,43 @@ def test_not_ready_when_stale_open_trades_exist() -> None:
 
     assert report["stale_open_trades"] == 1
     assert report["readiness_status"] == "NOT_READY"
+
+
+def test_not_ready_when_telegram_delivery_success_below_95_pct() -> None:
+    alert_history = [
+        {"telegram_sent": True, "alerted_at": "2026-05-01T00:00:00+00:00"}
+        for _index in range(94)
+    ]
+    alert_history.extend(
+        {
+            "telegram_sent": False,
+            "telegram_error": "Telegram send failed",
+            "alerted_at": "2026-05-01T01:00:00+00:00",
+        }
+        for _index in range(6)
+    )
+
+    report = build_live_readiness_report(
+        _passing_live_readiness_trades(),
+        [],
+        [{"status": "completed"}],
+        alert_history,
+    )
+
+    assert report["telegram_delivery_success_rate_pct"] == 94.0
+    assert report["readiness_status"] == "NOT_READY"
+
+
+def test_ready_for_testnet_only_when_all_paper_gates_pass() -> None:
+    report = build_live_readiness_report(
+        _passing_live_readiness_trades(),
+        [],
+        [{"status": "completed"}],
+        _healthy_alert_history(),
+    )
+
+    assert report["failed_gates"] == []
+    assert report["readiness_status"] == "READY_FOR_TESTNET_ONLY"
 
 
 def test_readiness_report_includes_recommendations() -> None:
@@ -158,17 +220,21 @@ def test_stale_paper_trades_are_closed_when_max_hold_is_exceeded(
 
     summary = paper_trading.update_open_paper_trades(FakeClient())
 
-    assert summary == {
-        "open_trades_checked": 1,
-        "closed_trades": 1,
-        "still_open": 0,
-    }
+    assert summary["open_trades_checked"] == 1
+    assert summary["closed_trades"] == 1
+    assert summary["closed_max_hold"] == 1
+    assert summary["still_open"] == 0
+    assert summary["errors"] == 0
     assert updates[0][0] == "paper-stale"
     assert updates[0][1]["status"] == "closed"
     assert updates[0][1]["exit_reason"] == "max_hold_expired"
     assert updates[0][1]["exit_price"] == 90.0
     assert updates[0][1]["pnl_pct"] == -10.0
-    assert events[0]["type"] == "closed"
+    assert events[0]["type"] == "max_hold_expired"
+    assert (
+        events[0]["notes"]
+        == "Closed stale paper trade because max_hold_hours was reached."
+    )
     assert (
         "Closed stale paper trade due to max hold: STALEUSDT"
         in caplog.text

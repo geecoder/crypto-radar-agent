@@ -1,5 +1,13 @@
 """Performance reporting for simulated paper trades."""
 
+from datetime import datetime, timezone
+from typing import Any
+
+from app.trading.paper_trading import (
+    MAX_OPEN_PAPER_TRADES_BY_ALERT_TYPE,
+    SPECULATIVE_EARLY_RUNNER_ALERT_TYPE,
+)
+
 GROUP_FIELDS = (
     "exit_reason",
     "target_bucket",
@@ -56,6 +64,26 @@ def build_paper_trading_report(paper_trades: list[dict]) -> dict:
         for trade in closed_trades
         if (pnl_amount := _as_float(trade.get("pnl_amount"))) is not None
     ]
+    open_concentration_by_alert_type = _count_by_group(open_trades, "alert_type")
+    open_concentration_by_strategy_name = _count_by_group(
+        open_trades,
+        "strategy_name",
+    )
+    stale_open_trade_list = _stale_open_trade_list(open_trades)
+    speculative_open_trades = open_concentration_by_alert_type.get(
+        SPECULATIVE_EARLY_RUNNER_ALERT_TYPE,
+        0,
+    )
+    speculative_closed_trades = [
+        trade
+        for trade in closed_trades
+        if str(trade.get("alert_type") or "") == SPECULATIVE_EARLY_RUNNER_ALERT_TYPE
+    ]
+    speculative_winning_trades = [
+        trade
+        for trade in speculative_closed_trades
+        if (_as_float(trade.get("pnl_pct")) or 0) > 0
+    ]
 
     report = {
         "total_trades": len(trades),
@@ -76,6 +104,16 @@ def build_paper_trading_report(paper_trades: list[dict]) -> dict:
         "best_symbol": _best_symbol(closed_trades),
         "worst_symbol": _worst_symbol(closed_trades),
         "exit_reason_counts": _count_by_group(closed_trades, "exit_reason"),
+        "open_concentration_by_alert_type": open_concentration_by_alert_type,
+        "open_concentration_by_strategy_name": open_concentration_by_strategy_name,
+        "stale_open_trades": len(stale_open_trade_list),
+        "stale_open_trade_list": stale_open_trade_list,
+        "speculative_early_runner_open_trades": speculative_open_trades,
+        "speculative_early_runner_closed_trades": len(speculative_closed_trades),
+        "speculative_early_runner_closed_win_rate_pct": _rate(
+            len(speculative_winning_trades),
+            len(speculative_closed_trades),
+        ),
     }
 
     for field in GROUP_FIELDS:
@@ -83,6 +121,9 @@ def build_paper_trading_report(paper_trades: list[dict]) -> dict:
             closed_trades,
             field,
         )
+
+    report["warnings"] = _build_warnings(report)
+    report["recommendations"] = _build_recommendations(report)
 
     return report
 
@@ -96,6 +137,7 @@ def format_paper_trading_report(report: dict) -> str:
         f"Total trades: {report.get('total_trades', 0)}",
         f"Open trades: {report.get('open_trades', 0)}",
         f"Closed trades: {report.get('closed_trades', 0)}",
+        f"Stale open trades: {report.get('stale_open_trades', 0)}",
         "",
         "Realised P/L",
         f"Total P/L amount: {_format_currency(report.get('total_pnl_amount', 0))}",
@@ -120,6 +162,15 @@ def format_paper_trading_report(report: dict) -> str:
         "Exit Reasons",
         *_format_counts(report.get("exit_reason_counts", {})),
         "",
+        "Open Trade Concentration by Alert Type",
+        *_format_counts(report.get("open_concentration_by_alert_type", {})),
+        "",
+        "Open Trade Concentration by Strategy",
+        *_format_counts(report.get("open_concentration_by_strategy_name", {})),
+        "",
+        "Stale Open Trades",
+        *_format_stale_open_trades(report.get("stale_open_trade_list", [])),
+        "",
         "Performance by Target Bucket",
         *_format_group_average(report.get("average_pnl_by_target_bucket", {})),
         "",
@@ -136,6 +187,12 @@ def format_paper_trading_report(report: dict) -> str:
         *_format_group_average(
             report.get("average_pnl_by_exhaustion_risk_level", {})
         ),
+        "",
+        "Warnings",
+        *_format_list(report.get("warnings", []), empty="- No active paper trading warnings."),
+        "",
+        "Recommendations",
+        *_format_list(report.get("recommendations", [])),
         "",
         "Notes",
         *_build_notes(report),
@@ -336,6 +393,128 @@ def _format_group_average(group_averages: dict) -> list[str]:
     ]
 
 
+def _stale_open_trade_list(open_trades: list[dict]) -> list[dict]:
+    """Return stale open trades with compact age details."""
+    stale_trades = []
+
+    for trade in open_trades:
+        age_hours = _age_hours(trade.get("opened_at"))
+        max_hold_hours = _as_float(trade.get("max_hold_hours"))
+
+        if max_hold_hours is None:
+            max_hold_hours = 48
+
+        if age_hours is None or age_hours < max_hold_hours:
+            continue
+
+        stale_trades.append(
+            {
+                "symbol": trade.get("symbol") or "Unknown",
+                "opened_at": trade.get("opened_at"),
+                "max_hold_hours": _round(max_hold_hours),
+                "age_hours": _round(age_hours),
+            }
+        )
+
+    return sorted(stale_trades, key=lambda trade: trade["age_hours"], reverse=True)
+
+
+def _age_hours(opened_at: Any) -> float | None:
+    """Return the age of a timestamp in hours."""
+    parsed = _parse_timestamp(opened_at)
+
+    if parsed is None:
+        return None
+
+    return (datetime.now(timezone.utc) - parsed).total_seconds() / 3600
+
+
+def _parse_timestamp(value: Any) -> datetime | None:
+    """Parse common ISO timestamps as UTC datetimes."""
+    if value is None:
+        return None
+
+    if isinstance(value, datetime):
+        parsed = value
+    else:
+        try:
+            parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        except ValueError:
+            return None
+
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+
+    return parsed.astimezone(timezone.utc)
+
+
+def _build_warnings(report: dict) -> list[str]:
+    """Build paper-trading quality warnings."""
+    warnings = []
+    speculative_limit = MAX_OPEN_PAPER_TRADES_BY_ALERT_TYPE[
+        SPECULATIVE_EARLY_RUNNER_ALERT_TYPE
+    ]
+
+    if report.get("stale_open_trades", 0) > 0:
+        warnings.append("Stale open paper trades exist.")
+
+    if report.get("speculative_early_runner_open_trades", 0) > speculative_limit:
+        warnings.append("Speculative Early Runner open trades exceed configured limit.")
+
+    if (
+        report.get("speculative_early_runner_closed_win_rate_pct", 0) < 40
+        and _has_speculative_closed_trades(report)
+    ):
+        warnings.append("Speculative Early Runner closed win rate is below 40%.")
+
+    if report.get("average_pnl_pct", 0) <= 0 and report.get("closed_trades", 0) > 0:
+        warnings.append("Average realised paper P/L is not positive.")
+
+    return warnings
+
+
+def _build_recommendations(report: dict) -> list[str]:
+    """Build paper-trading quality recommendations."""
+    recommendations = [
+        (
+            "Speculative Early Runner paper trading is underperforming; "
+            "tightened eligibility rules are active."
+        ),
+        "Do not proceed to live trading while stale paper trades exist.",
+        "Review Telegram delivery report before relying on alerts.",
+    ]
+
+    return _dedupe(recommendations)
+
+
+def _has_speculative_closed_trades(report: dict) -> bool:
+    return int(report.get("speculative_early_runner_closed_trades", 0) or 0) > 0
+
+
+def _format_stale_open_trades(stale_trades: list[dict]) -> list[str]:
+    """Format stale open trade details."""
+    if not stale_trades:
+        return ["- None"]
+
+    return [
+        (
+            f"- {trade.get('symbol', 'Unknown')}: opened "
+            f"{trade.get('opened_at') or 'Unknown'}, max hold "
+            f"{_format_pct(trade.get('max_hold_hours', 0))}h, age "
+            f"{_format_pct(trade.get('age_hours', 0))}h"
+        )
+        for trade in stale_trades
+    ]
+
+
+def _format_list(items: list[str], empty: str = "- Not available") -> list[str]:
+    """Format a string list as bullet lines."""
+    if not items:
+        return [empty]
+
+    return [f"- {item}" for item in items]
+
+
 def _build_notes(report: dict) -> list[str]:
     """Build plain-English notes for the report."""
     notes = []
@@ -378,3 +557,18 @@ def _format_currency(value) -> str:
     number = _as_float(value) or 0.0
     sign = "-" if number < 0 else ""
     return f"{sign}${abs(number):.2f}"
+
+
+def _dedupe(items: list[str]) -> list[str]:
+    """Deduplicate strings while preserving order."""
+    seen = set()
+    deduped = []
+
+    for item in items:
+        if item in seen:
+            continue
+
+        seen.add(item)
+        deduped.append(item)
+
+    return deduped

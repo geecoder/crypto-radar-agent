@@ -322,6 +322,7 @@ def _build_speculative_early_runner_plan(
 
 def _speculative_early_runner_paper_eligibility(result: dict) -> tuple[bool, str]:
     """Return whether a speculative early runner can create a small paper trade."""
+    alert_type = _get_alert_type(result)
     opportunity_score = _safe_float(
         _get_opportunity_value(result, "opportunity_score"),
         default=None,
@@ -332,6 +333,10 @@ def _speculative_early_runner_paper_eligibility(result: dict) -> tuple[bool, str
         _get_opportunity_value(result, "classification") or ""
     ).strip()
     exhaustion_level = _get_exhaustion_risk_level(result).strip()
+    move_pct = _safe_float(_get_move_from_recent_low_pct(result), default=None)
+    change_1h = _safe_float(_get_recent_price_change(result, "change_1h_pct")) or 0
+    change_2h = _safe_float(_get_recent_price_change(result, "change_2h_pct")) or 0
+    change_4h = _safe_float(_get_recent_price_change(result, "change_4h_pct")) or 0
     volume_acceleration_1h = (
         _safe_float(
             _get_volume_acceleration_ratio(
@@ -351,23 +356,32 @@ def _speculative_early_runner_paper_eligibility(result: dict) -> tuple[bool, str
         or 0
     )
 
+    if alert_type != "Speculative Early Runner Alert":
+        return False, "Rejected speculative runner: alert type is not Speculative Early Runner Alert."
+
     if opportunity_score is None or opportunity_score < 50:
-        return False, "Opportunity score is below 50."
-
-    if liquidity_label.lower() == "very thin":
-        return False, "Liquidity is Very thin."
-
-    if target_bucket.lower() == "no clear upside setup":
-        return False, "Target bucket has no clear upside setup."
+        return False, "Rejected speculative runner: opportunity score below 50."
 
     if classification.lower() == "ignore":
-        return False, "Classification is Ignore."
+        return False, "Rejected speculative runner: classification is Ignore."
 
-    if not (volume_acceleration_1h >= 2 or volume_acceleration_2h >= 2):
-        return False, "Needs 1h or 2h volume acceleration >= 2x."
+    if target_bucket.lower() == "no clear upside setup":
+        return False, "Rejected speculative runner: target bucket has no clear upside setup."
+
+    if liquidity_label.lower() == "very thin":
+        return False, "Rejected speculative runner: liquidity is Very thin."
 
     if exhaustion_level.lower() == "high":
-        return False, "Exhaustion risk is High."
+        return False, "Rejected speculative runner: exhaustion risk is High."
+
+    if move_pct is None or move_pct < 5 or move_pct > 20:
+        return False, "Rejected speculative runner: move from recent low must be between 5% and 20%."
+
+    if not (volume_acceleration_1h >= 2 or volume_acceleration_2h >= 2):
+        return False, "Rejected speculative runner: volume acceleration below 2x."
+
+    if not (change_1h >= 2 or change_2h >= 4 or change_4h >= 6):
+        return False, "Rejected speculative runner: price change confirmation is too weak."
 
     return True, "Speculative early runner paper trade eligible."
 

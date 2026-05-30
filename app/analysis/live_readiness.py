@@ -7,6 +7,12 @@ not connect to private exchange APIs, place orders, or enable live trading.
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from app.analysis.telegram_delivery import build_telegram_delivery_report
+from app.trading.paper_trading import (
+    MAX_TOTAL_OPEN_PAPER_TRADES,
+    SPECULATIVE_EARLY_RUNNER_ALERT_TYPE,
+)
+
 NOT_READY = "NOT_READY"
 PAPER_TESTING = "PAPER_TESTING"
 READY_FOR_TESTNET_ONLY = "READY_FOR_TESTNET_ONLY"
@@ -31,9 +37,16 @@ def build_live_readiness_report(
     stale_open_trades = [
         trade for trade in open_trades if _is_stale_open_trade(trade)
     ]
-    recent_alerts = _recent_records(alerts, limit=50)
     winning_trades = [trade for trade in closed_trades if _pnl_pct(trade) > 0]
     losing_trades = [trade for trade in closed_trades if _pnl_pct(trade) < 0]
+    speculative_closed_trades = [
+        trade
+        for trade in closed_trades
+        if str(trade.get("alert_type") or "") == SPECULATIVE_EARLY_RUNNER_ALERT_TYPE
+    ]
+    speculative_winning_trades = [
+        trade for trade in speculative_closed_trades if _pnl_pct(trade) > 0
+    ]
     pnl_pct_values = [
         pnl_pct
         for trade in closed_trades
@@ -46,14 +59,14 @@ def build_live_readiness_report(
     ]
     scans_completed = sum(1 for scan in scans if _scan_completed(scan))
     scans_failed_or_stuck = sum(1 for scan in scans if _scan_failed_or_stuck(scan))
-    telegram_failure_count = sum(
-        1 for alert in recent_alerts if _telegram_failed(alert)
-    )
+    telegram_delivery_report = build_telegram_delivery_report(alerts)
+    recent_scan_runs_completed = _recent_scan_runs_completed(scans)
 
     report = {
         "total_paper_trades": len(trades),
         "closed_trades": len(closed_trades),
         "open_trades": len(open_trades),
+        "total_open_trades": len(open_trades),
         "stale_open_trades": len(stale_open_trades),
         "winning_trades": len(winning_trades),
         "losing_trades": len(losing_trades),
@@ -68,10 +81,24 @@ def build_live_readiness_report(
         ),
         "best_strategy": _ranked_strategy(closed_trades, reverse=True),
         "worst_strategy": _ranked_strategy(closed_trades, reverse=False),
+        "speculative_early_runner_closed_trades": len(speculative_closed_trades),
+        "speculative_early_runner_closed_win_rate_pct": _percentage(
+            len(speculative_winning_trades),
+            len(speculative_closed_trades),
+        ),
         "scans_completed": scans_completed,
         "scans_failed_or_stuck": scans_failed_or_stuck,
-        "telegram_failure_count": telegram_failure_count,
+        "recent_scan_runs_completed": recent_scan_runs_completed,
+        "telegram_failure_count": telegram_delivery_report.get(
+            "telegram_error_count",
+            0,
+        ),
+        "telegram_delivery_success_rate_pct": telegram_delivery_report.get(
+            "delivery_success_rate_pct",
+            0.0,
+        ),
     }
+    report["failed_gates"] = _failed_gates(report)
     report["readiness_status"] = _readiness_status(
         report,
         decisions=decisions,
@@ -112,11 +139,26 @@ def format_live_readiness_report(report: dict) -> str:
         "Strategy Quality",
         f"Best strategy: {_format_strategy(report.get('best_strategy'))}",
         f"Worst strategy: {_format_strategy(report.get('worst_strategy'))}",
+        (
+            "Speculative Early Runner closed win rate: "
+            f"{_format_pct(report.get('speculative_early_runner_closed_win_rate_pct', 0))}%"
+        ),
         "",
         "Operational Health",
         f"Scans completed: {report.get('scans_completed', 0)}",
         f"Scans failed or stuck: {report.get('scans_failed_or_stuck', 0)}",
-        f"Telegram failures (recent): {report.get('telegram_failure_count', 0)}",
+        (
+            "Recent scan runs completed: "
+            f"{str(bool(report.get('recent_scan_runs_completed'))).lower()}"
+        ),
+        f"Telegram errors: {report.get('telegram_failure_count', 0)}",
+        (
+            "Telegram delivery success rate: "
+            f"{_format_pct(report.get('telegram_delivery_success_rate_pct', 0))}%"
+        ),
+        "",
+        "Failed Gates",
+        *_format_recommendations(report.get("failed_gates", [])),
         "",
         "Recommendations",
         *_format_recommendations(report.get("recommendations", [])),
@@ -124,6 +166,7 @@ def format_live_readiness_report(report: dict) -> str:
         "Notes",
         "- This is a paper-trading maturity report only.",
         "- No live trading is implemented or enabled by this command.",
+        "- Do not connect Binance trading permissions until readiness gates pass.",
     ]
 
     return "\n".join(lines)
@@ -135,22 +178,7 @@ def _readiness_status(
     scan_runs: list[dict],
 ) -> str:
     """Apply the maturity gate rules to report metrics."""
-    if int(report.get("closed_trades", 0) or 0) < 100:
-        return NOT_READY
-
-    if _as_float(report.get("average_pnl_pct")) <= 0:
-        return NOT_READY
-
-    if _as_float(report.get("win_rate_pct")) < 45:
-        return NOT_READY
-
-    if int(report.get("stale_open_trades", 0) or 0) > 0:
-        return NOT_READY
-
-    if int(report.get("scans_failed_or_stuck", 0) or 0) > 0:
-        return NOT_READY
-
-    if int(report.get("telegram_failure_count", 0) or 0) > 0:
+    if report.get("failed_gates"):
         return NOT_READY
 
     if _has_testnet_validation(decisions, scan_runs):
@@ -169,21 +197,59 @@ def _build_recommendations(report: dict) -> list[str]:
     if int(report.get("stale_open_trades", 0) or 0) > 0:
         recommendations.append("Fix stale paper trade closure.")
 
+    if int(report.get("total_open_trades", 0) or 0) > MAX_TOTAL_OPEN_PAPER_TRADES:
+        recommendations.append("Reduce open paper trade concentration.")
+
     if (
         _as_float(report.get("average_pnl_pct")) <= 0
         or _as_float(report.get("win_rate_pct")) < 45
+        or _as_float(report.get("speculative_early_runner_closed_win_rate_pct")) < 40
     ):
         recommendations.append("Improve speculative early runner filters.")
 
-    if int(report.get("scans_failed_or_stuck", 0) or 0) > 0:
+    if not bool(report.get("recent_scan_runs_completed")):
         recommendations.append("Fix failed or stuck scan runs.")
 
-    if int(report.get("telegram_failure_count", 0) or 0) > 0:
+    if _as_float(report.get("telegram_delivery_success_rate_pct")) < 95:
         recommendations.append("Fix recent Telegram delivery failures.")
 
     recommendations.append("Do not enable Binance trading permissions yet.")
+    recommendations.append(
+        "Do not connect Binance trading permissions until readiness gates pass."
+    )
 
     return _dedupe(recommendations)
+
+
+def _failed_gates(report: dict) -> list[str]:
+    """Return the readiness gates that currently fail."""
+    failed = []
+
+    if int(report.get("closed_trades", 0) or 0) < 100:
+        failed.append("closed_trades must be at least 100")
+
+    if _as_float(report.get("average_pnl_pct")) <= 0:
+        failed.append("average_pnl_pct must be greater than 0")
+
+    if _as_float(report.get("win_rate_pct")) < 45:
+        failed.append("win_rate_pct must be at least 45")
+
+    if int(report.get("stale_open_trades", 0) or 0) != 0:
+        failed.append("stale_open_trades must be 0")
+
+    if int(report.get("total_open_trades", 0) or 0) > MAX_TOTAL_OPEN_PAPER_TRADES:
+        failed.append("total_open_trades must be 20 or lower")
+
+    if _as_float(report.get("speculative_early_runner_closed_win_rate_pct")) < 40:
+        failed.append("speculative_early_runner closed win rate must be at least 40")
+
+    if _as_float(report.get("telegram_delivery_success_rate_pct")) < 95:
+        failed.append("telegram delivery success rate must be at least 95")
+
+    if not bool(report.get("recent_scan_runs_completed")):
+        failed.append("recent scan runs must be completed successfully")
+
+    return failed
 
 
 def _is_status(trade: dict, status: str) -> bool:
@@ -225,10 +291,6 @@ def _scan_failed_or_stuck(scan: dict) -> bool:
     return bool(scan.get("error_message") or not scan.get("completed_at"))
 
 
-def _telegram_failed(alert: dict) -> bool:
-    return bool(str(alert.get("telegram_error") or "").strip())
-
-
 def _recent_records(records: list[dict], limit: int) -> list[dict]:
     """Return the most recent records by common timestamp fields."""
     sortable_records = []
@@ -250,6 +312,19 @@ def _recent_records(records: list[dict], limit: int) -> list[dict]:
         return [record for _timestamp, _index, record in sortable_records[:limit]]
 
     return records[-limit:]
+
+
+def _recent_scan_runs_completed(scan_runs: list[dict]) -> bool:
+    """Return whether the recent scan runs completed successfully."""
+    recent_scan_runs = _recent_records(scan_runs, limit=5)
+
+    if not recent_scan_runs:
+        return False
+
+    return all(
+        _scan_completed(scan) and not scan.get("error_message")
+        for scan in recent_scan_runs
+    )
 
 
 def _exit_rate(closed_trades: list[dict], exit_reason: str) -> float:

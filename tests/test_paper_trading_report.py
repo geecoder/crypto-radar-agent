@@ -1,5 +1,7 @@
 """Tests for paper trading performance reports."""
 
+from datetime import datetime, timedelta, timezone
+
 from app.analysis.paper_trading_report import (
     build_paper_trading_report,
     format_paper_trading_report,
@@ -165,3 +167,41 @@ def test_grouped_average_calculations() -> None:
     assert report["average_pnl_by_move_stage"]["Stage 2"] == 10
     assert report["average_pnl_by_liquidity_label"]["Strong"] == 10
     assert report["average_pnl_by_exhaustion_risk_level"]["Low"] == 10
+
+
+def test_paper_trading_report_includes_open_concentration_and_stale_warnings() -> None:
+    stale_open_trade = {
+        "id": "paper_stale",
+        "symbol": "STALEUSDT",
+        "status": "open",
+        "alert_type": "Speculative Early Runner Alert",
+        "strategy_name": "speculative_early_runner_paper",
+        "opened_at": (datetime.now(timezone.utc) - timedelta(hours=30)).isoformat(),
+        "max_hold_hours": 24,
+    }
+    losing_speculative_trade = _closed_trade(
+        "RUNNERUSDT",
+        -7,
+        -1.75,
+        "stop_loss",
+    )
+    losing_speculative_trade["alert_type"] = "Speculative Early Runner Alert"
+    losing_speculative_trade["strategy_name"] = "speculative_early_runner_paper"
+
+    report = build_paper_trading_report([stale_open_trade, losing_speculative_trade])
+    formatted = format_paper_trading_report(report)
+
+    assert report["open_concentration_by_alert_type"] == {
+        "Speculative Early Runner Alert": 1
+    }
+    assert report["open_concentration_by_strategy_name"] == {
+        "speculative_early_runner_paper": 1
+    }
+    assert report["stale_open_trades"] == 1
+    assert report["stale_open_trade_list"][0]["symbol"] == "STALEUSDT"
+    assert "Stale open paper trades exist." in report["warnings"]
+    assert (
+        "Speculative Early Runner paper trading is underperforming; "
+        "tightened eligibility rules are active."
+    ) in report["recommendations"]
+    assert "Review Telegram delivery report before relying on alerts." in formatted

@@ -32,6 +32,10 @@ from app.analysis.strategy_performance import (
     build_strategy_performance_report,
     format_strategy_performance_report,
 )
+from app.analysis.telegram_delivery import (
+    build_telegram_delivery_report,
+    format_telegram_delivery_report,
+)
 from app.binance.client import BinancePublicClient
 from app.binance.market_filter import select_scan_universe
 from app.binance.symbols import get_active_usdt_symbols
@@ -101,6 +105,11 @@ def parse_args() -> argparse.Namespace:
         help="Update open paper trades using public market candles and exit.",
     )
     parser.add_argument(
+        "--repair-stale-paper-trades",
+        action="store_true",
+        help="Repair stale open paper trades using public market candles and exit.",
+    )
+    parser.add_argument(
         "--paper-trading-report",
         action="store_true",
         help="Print a simulated paper trading performance report and exit.",
@@ -114,6 +123,16 @@ def parse_args() -> argparse.Namespace:
         "--live-readiness-report",
         action="store_true",
         help="Print paper-trading maturity and live-readiness governance report.",
+    )
+    parser.add_argument(
+        "--telegram-delivery-report",
+        action="store_true",
+        help="Print Telegram delivery monitoring report and exit.",
+    )
+    parser.add_argument(
+        "--send-telegram-delivery-report",
+        action="store_true",
+        help="Send Telegram delivery monitoring report to Telegram and exit.",
     )
     parser.add_argument(
         "--send-strategy-performance-report",
@@ -238,6 +257,17 @@ def _persist_suppressed_paper_decision(candidate: dict, reason: str) -> None:
         None,
         decision["reason"],
     )
+
+
+def _print_paper_trade_update_summary(summary: dict) -> None:
+    """Print a paper-trade update summary."""
+    print(f"Open trades checked: {summary.get('open_trades_checked', 0)}")
+    print(f"Closed trades: {summary.get('closed_trades', 0)}")
+    print(f"Closed stop loss: {summary.get('closed_stop_loss', 0)}")
+    print(f"Closed take profit: {summary.get('closed_take_profit', 0)}")
+    print(f"Closed max hold: {summary.get('closed_max_hold', 0)}")
+    print(f"Still open: {summary.get('still_open', 0)}")
+    print(f"Errors: {summary.get('errors', 0)}")
 
 
 def _candidate_alert_type(candidate: dict) -> str:
@@ -514,9 +544,15 @@ def main() -> None:
         summary = update_open_paper_trades(client)
 
         print("Paper trade update completed.")
-        print(f"Open trades checked: {summary['open_trades_checked']}")
-        print(f"Closed trades: {summary['closed_trades']}")
-        print(f"Still open: {summary['still_open']}")
+        _print_paper_trade_update_summary(summary)
+        return
+
+    if args.repair_stale_paper_trades:
+        client = BinancePublicClient()
+        summary = update_open_paper_trades(client)
+
+        print("Stale paper trade repair completed.")
+        _print_paper_trade_update_summary(summary)
         return
 
     if args.paper_trading_report:
@@ -529,6 +565,25 @@ def main() -> None:
         paper_trades = load_all_paper_trades()
         report = build_strategy_performance_report(paper_trades)
         print(format_strategy_performance_report(report))
+        return
+
+    if args.telegram_delivery_report:
+        alert_history = load_alert_history()
+        report = build_telegram_delivery_report(alert_history)
+        print(format_telegram_delivery_report(report))
+        return
+
+    if args.send_telegram_delivery_report:
+        alert_history = load_alert_history()
+        report = build_telegram_delivery_report(alert_history)
+        message = format_telegram_delivery_report(report)
+        message_sent = send_telegram_message(message)
+
+        if message_sent:
+            print("Telegram delivery report sent to Telegram.")
+        else:
+            print("Failed to send Telegram delivery report.")
+
         return
 
     if args.live_readiness_report:

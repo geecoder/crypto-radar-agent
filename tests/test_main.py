@@ -284,6 +284,46 @@ def test_main_updates_paper_trades_and_exits(monkeypatch, capsys) -> None:
     assert "Still open: 1" in output
 
 
+def test_main_repairs_stale_paper_trades_and_exits(monkeypatch, capsys) -> None:
+    fake_client = object()
+    summary = {
+        "open_trades_checked": 3,
+        "closed_trades": 2,
+        "closed_stop_loss": 0,
+        "closed_take_profit": 0,
+        "closed_max_hold": 2,
+        "still_open": 1,
+        "errors": 0,
+    }
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["python -m app.main", "--repair-stale-paper-trades"],
+    )
+    monkeypatch.setattr(app_main, "BinancePublicClient", lambda: fake_client)
+    monkeypatch.setattr(
+        app_main,
+        "update_open_paper_trades",
+        lambda client: summary if client is fake_client else {},
+    )
+    monkeypatch.setattr(
+        app_main,
+        "scan_symbols",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("Scanner should not run in stale repair mode.")
+        ),
+    )
+
+    app_main.main()
+
+    output = capsys.readouterr().out
+
+    assert "Crypto Radar Agent started" in output
+    assert "Stale paper trade repair completed." in output
+    assert "Closed max hold: 2" in output
+
+
 def test_main_prints_paper_trading_report_and_exits(monkeypatch, capsys) -> None:
     paper_trades = [
         {
@@ -313,6 +353,63 @@ def test_main_prints_paper_trading_report_and_exits(monkeypatch, capsys) -> None
     assert "Crypto Radar Paper Trading Report" in output
     assert "Total trades: 1" in output
     assert "Average P/L: 8%" in output
+
+
+def test_main_prints_telegram_delivery_report_and_exits(monkeypatch, capsys) -> None:
+    alert_history = [{"telegram_sent": True}]
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["python -m app.main", "--telegram-delivery-report"],
+    )
+    monkeypatch.setattr(app_main, "load_alert_history", lambda: alert_history)
+    monkeypatch.setattr(
+        app_main,
+        "scan_symbols",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("Scanner should not run in Telegram delivery report mode.")
+        ),
+    )
+
+    app_main.main()
+
+    output = capsys.readouterr().out
+
+    assert "Crypto Radar Agent started" in output
+    assert "Crypto Radar Telegram Delivery Report" in output
+    assert "Total alerts reviewed: 1" in output
+
+
+def test_main_sends_telegram_delivery_report(monkeypatch, capsys) -> None:
+    sent_messages = []
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["python -m app.main", "--send-telegram-delivery-report"],
+    )
+    monkeypatch.setattr(app_main, "load_alert_history", lambda: [{"telegram_sent": True}])
+    monkeypatch.setattr(
+        app_main,
+        "send_telegram_message",
+        lambda message: sent_messages.append(message) or True,
+    )
+    monkeypatch.setattr(
+        app_main,
+        "scan_symbols",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("Scanner should not run in send delivery report mode.")
+        ),
+    )
+
+    app_main.main()
+
+    output = capsys.readouterr().out
+
+    assert "Telegram delivery report sent to Telegram." in output
+    assert len(sent_messages) == 1
+    assert "Crypto Radar Telegram Delivery Report" in sent_messages[0]
 
 
 def test_main_prints_live_readiness_report_and_exits(monkeypatch, capsys) -> None:
