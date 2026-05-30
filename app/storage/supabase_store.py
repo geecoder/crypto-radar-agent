@@ -1016,6 +1016,136 @@ def insert_paper_trade_decision(record: dict) -> str:
     return decision_id
 
 
+def load_paper_trade_decisions(limit: int | None = None) -> list[dict]:
+    """Load paper-trade decision records from Supabase."""
+    connection = get_connection()
+
+    if limit is not None:
+        limit = max(0, int(limit))
+
+    try:
+        with connection:
+            with connection.cursor(cursor_factory=RealDictCursor) as cursor:
+                if limit is None:
+                    cursor.execute(
+                        """
+                        SELECT
+                            id,
+                            symbol,
+                            alert_type,
+                            alert_history_id,
+                            paper_trade_id,
+                            decision,
+                            eligible,
+                            reason,
+                            strategy_name,
+                            trade_plan_type,
+                            metadata,
+                            created_at
+                        FROM paper_trade_decisions
+                        ORDER BY created_at DESC, id ASC
+                        """
+                    )
+                else:
+                    cursor.execute(
+                        """
+                        SELECT
+                            id,
+                            symbol,
+                            alert_type,
+                            alert_history_id,
+                            paper_trade_id,
+                            decision,
+                            eligible,
+                            reason,
+                            strategy_name,
+                            trade_plan_type,
+                            metadata,
+                            created_at
+                        FROM paper_trade_decisions
+                        ORDER BY created_at DESC, id ASC
+                        LIMIT %s
+                        """,
+                        (limit,),
+                    )
+
+                rows = cursor.fetchall()
+    finally:
+        connection.close()
+
+    return [_paper_trade_decision_row_to_record(row) for row in rows]
+
+
+def load_scan_runs(limit: int | None = None) -> list[dict]:
+    """Load scan run records from Supabase."""
+    connection = get_connection()
+
+    if limit is not None:
+        limit = max(0, int(limit))
+
+    try:
+        with connection:
+            with connection.cursor(cursor_factory=RealDictCursor) as cursor:
+                if limit is None:
+                    cursor.execute(
+                        """
+                        SELECT
+                            id,
+                            run_source,
+                            started_at,
+                            completed_at,
+                            status,
+                            binance_base_url_order,
+                            paper_strategy,
+                            metadata,
+                            total_active_symbols,
+                            total_scan_universe,
+                            total_alert_candidates,
+                            total_telegram_sent,
+                            total_paper_trades_created,
+                            total_paper_trades_skipped,
+                            error_message,
+                            created_at,
+                            updated_at
+                        FROM scan_runs
+                        ORDER BY started_at DESC, id ASC
+                        """
+                    )
+                else:
+                    cursor.execute(
+                        """
+                        SELECT
+                            id,
+                            run_source,
+                            started_at,
+                            completed_at,
+                            status,
+                            binance_base_url_order,
+                            paper_strategy,
+                            metadata,
+                            total_active_symbols,
+                            total_scan_universe,
+                            total_alert_candidates,
+                            total_telegram_sent,
+                            total_paper_trades_created,
+                            total_paper_trades_skipped,
+                            error_message,
+                            created_at,
+                            updated_at
+                        FROM scan_runs
+                        ORDER BY started_at DESC, id ASC
+                        LIMIT %s
+                        """,
+                        (limit,),
+                    )
+
+                rows = cursor.fetchall()
+    finally:
+        connection.close()
+
+    return [_scan_run_row_to_record(row) for row in rows]
+
+
 def upsert_alert_outcome(record: dict) -> None:
     """Insert or update one alert outcome record in Supabase."""
     alert_id = record.get("alert_id")
@@ -1622,6 +1752,47 @@ def _paper_trade_row_to_record(row: dict) -> dict:
         "pnl_pct": _to_plain_number(row.get("pnl_pct")),
         "pnl_amount": _to_plain_number(row.get("pnl_amount")),
         "exit_reason": row.get("exit_reason"),
+        "created_at": _to_iso(row.get("created_at")),
+        "updated_at": _to_iso(row.get("updated_at")),
+    }
+
+
+def _paper_trade_decision_row_to_record(row: dict) -> dict:
+    """Map a paper_trade_decisions row into a JSON-friendly record."""
+    return {
+        "id": row.get("id"),
+        "symbol": row.get("symbol"),
+        "alert_type": row.get("alert_type"),
+        "alert_history_id": row.get("alert_history_id"),
+        "paper_trade_id": row.get("paper_trade_id"),
+        "decision": row.get("decision"),
+        "eligible": bool(row.get("eligible")),
+        "reason": row.get("reason"),
+        "strategy_name": row.get("strategy_name"),
+        "trade_plan_type": row.get("trade_plan_type"),
+        "metadata": _as_json_value(row.get("metadata")),
+        "created_at": _to_iso(row.get("created_at")),
+    }
+
+
+def _scan_run_row_to_record(row: dict) -> dict:
+    """Map a scan_runs row into a JSON-friendly record."""
+    return {
+        "id": row.get("id"),
+        "run_source": row.get("run_source"),
+        "started_at": _to_iso(row.get("started_at")),
+        "completed_at": _to_iso(row.get("completed_at")),
+        "status": row.get("status"),
+        "binance_base_url_order": row.get("binance_base_url_order"),
+        "paper_strategy": row.get("paper_strategy"),
+        "metadata": _as_json_value(row.get("metadata")),
+        "total_active_symbols": row.get("total_active_symbols"),
+        "total_scan_universe": row.get("total_scan_universe"),
+        "total_alert_candidates": row.get("total_alert_candidates"),
+        "total_telegram_sent": row.get("total_telegram_sent"),
+        "total_paper_trades_created": row.get("total_paper_trades_created"),
+        "total_paper_trades_skipped": row.get("total_paper_trades_skipped"),
+        "error_message": row.get("error_message"),
         "created_at": _to_iso(row.get("created_at")),
         "updated_at": _to_iso(row.get("updated_at")),
     }

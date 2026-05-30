@@ -69,7 +69,7 @@ def _speculative_alert() -> dict:
         "latest_close": 0.02,
         "alert_type": "Speculative Early Runner Alert",
         "opportunity": {
-            "opportunity_score": 32,
+            "opportunity_score": 55,
             "classification": "High-risk watch",
             "target_bucket": "High-risk early runner watch",
             "risk_level": "High",
@@ -77,7 +77,7 @@ def _speculative_alert() -> dict:
         },
         "move_stage_signal": _move_signal(8),
         "recent_price_changes": _changes(),
-        "volume_acceleration": _volume_acceleration(),
+        "volume_acceleration": _volume_acceleration(ratio_1h=2.1),
         "liquidity_signal": _liquidity(),
         "exhaustion_signal": _exhaustion(),
         "explosive_mover": {
@@ -152,7 +152,7 @@ def test_speculative_paper_trade_created_only_when_plan_allows(
     events_file = tmp_path / "paper_trade_events.json"
     eligible = _speculative_alert()
     rejected = _speculative_alert()
-    rejected["volume_acceleration"] = _volume_acceleration(ratio_1h=1.1, ratio_2h=1.1)
+    rejected["volume_acceleration"] = _volume_acceleration(ratio_1h=1.5, ratio_2h=1.5)
     rejected["trade_plan"] = generate_trade_plan(rejected)
 
     monkeypatch.setattr(paper_trading, "USE_SUPABASE", False)

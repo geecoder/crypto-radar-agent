@@ -315,6 +315,39 @@ def test_main_prints_paper_trading_report_and_exits(monkeypatch, capsys) -> None
     assert "Average P/L: 8%" in output
 
 
+def test_main_prints_live_readiness_report_and_exits(monkeypatch, capsys) -> None:
+    paper_trades = [
+        {
+            "symbol": "BTCUSDT",
+            "status": "closed",
+            "pnl_pct": 8,
+            "pnl_amount": 8,
+            "exit_reason": "take_profit_1",
+        }
+    ]
+
+    monkeypatch.setattr(sys, "argv", ["python -m app.main", "--live-readiness-report"])
+    monkeypatch.setattr(app_main, "USE_SUPABASE", False)
+    monkeypatch.setattr(app_main, "load_all_paper_trades", lambda: paper_trades)
+    monkeypatch.setattr(app_main, "load_alert_history", lambda: [])
+    monkeypatch.setattr(
+        app_main,
+        "scan_symbols",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("Scanner should not run in live-readiness-report mode.")
+        ),
+    )
+
+    app_main.main()
+
+    output = capsys.readouterr().out
+
+    assert "Crypto Radar Agent started" in output
+    assert "Crypto Radar Live Readiness Report" in output
+    assert "Status: NOT_READY" in output
+    assert "Total paper trades: 1" in output
+
+
 def test_main_prints_symbol_diagnostic_and_exits(monkeypatch, capsys) -> None:
     fake_client = object()
     diagnostic_result = {

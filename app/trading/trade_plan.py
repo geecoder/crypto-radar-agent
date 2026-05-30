@@ -322,10 +322,16 @@ def _build_speculative_early_runner_plan(
 
 def _speculative_early_runner_paper_eligibility(result: dict) -> tuple[bool, str]:
     """Return whether a speculative early runner can create a small paper trade."""
-    exhaustion_level = _get_exhaustion_risk_level(result).lower()
-    move_pct = _safe_float(_get_move_from_recent_low_pct(result), default=0) or 0
-    change_1h = _safe_float(_get_recent_price_change(result, "change_1h_pct")) or 0
-    change_2h = _safe_float(_get_recent_price_change(result, "change_2h_pct")) or 0
+    opportunity_score = _safe_float(
+        _get_opportunity_value(result, "opportunity_score"),
+        default=None,
+    )
+    liquidity_label = _get_liquidity_label(result).strip()
+    target_bucket = str(_get_opportunity_value(result, "target_bucket") or "").strip()
+    classification = str(
+        _get_opportunity_value(result, "classification") or ""
+    ).strip()
+    exhaustion_level = _get_exhaustion_risk_level(result).strip()
     volume_acceleration_1h = (
         _safe_float(
             _get_volume_acceleration_ratio(
@@ -345,17 +351,23 @@ def _speculative_early_runner_paper_eligibility(result: dict) -> tuple[bool, str
         or 0
     )
 
-    if exhaustion_level == "high":
+    if opportunity_score is None or opportunity_score < 50:
+        return False, "Opportunity score is below 50."
+
+    if liquidity_label.lower() == "very thin":
+        return False, "Liquidity is Very thin."
+
+    if target_bucket.lower() == "no clear upside setup":
+        return False, "Target bucket has no clear upside setup."
+
+    if classification.lower() == "ignore":
+        return False, "Classification is Ignore."
+
+    if not (volume_acceleration_1h >= 2 or volume_acceleration_2h >= 2):
+        return False, "Needs 1h or 2h volume acceleration >= 2x."
+
+    if exhaustion_level.lower() == "high":
         return False, "Exhaustion risk is High."
-
-    if move_pct > 20:
-        return False, "Move from recent low is above 20%."
-
-    if not (change_1h >= 2 or change_2h >= 4):
-        return False, "Needs 1h change >= 2% or 2h change >= 4%."
-
-    if not (volume_acceleration_1h >= 1.2 or volume_acceleration_2h >= 1.2):
-        return False, "Needs 1h or 2h volume acceleration >= 1.2x."
 
     return True, "Speculative early runner paper trade eligible."
 
@@ -475,6 +487,16 @@ def _get_volume_acceleration_ratio(result: dict, key: str):
 
     volume_acceleration = result.get("volume_acceleration") or {}
     return volume_acceleration.get(key)
+
+
+def _get_opportunity_value(result: dict, key: str):
+    """Read opportunity values from nested or flattened result data."""
+    opportunity = result.get("opportunity") or {}
+
+    if opportunity.get(key) is not None:
+        return opportunity.get(key)
+
+    return result.get(key)
 
 
 def _safe_float(value, default: float | None = 0.0) -> float | None:

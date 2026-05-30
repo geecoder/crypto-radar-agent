@@ -97,7 +97,7 @@ def get_speculative_early_runner_strategy() -> PaperTradingStrategy:
     """Return the high-risk speculative early-runner paper-only strategy."""
     return PaperTradingStrategy(
         name="speculative_early_runner_paper",
-        minimum_opportunity_score=0,
+        minimum_opportunity_score=50,
         min_move_from_recent_low_pct=5,
         max_move_from_recent_low_pct=20,
         allow_thin_liquidity=True,

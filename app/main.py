@@ -20,6 +20,10 @@ from app.analysis.paper_trading_report import (
     build_paper_trading_report,
     format_paper_trading_report,
 )
+from app.analysis.live_readiness import (
+    build_live_readiness_report,
+    format_live_readiness_report,
+)
 from app.analysis.signal_analysis import (
     build_signal_analysis,
     format_signal_analysis,
@@ -46,6 +50,8 @@ from app.storage.supabase_store import (
     format_persistence_health_check,
     INVALID_SUPABASE_DATABASE_URL_MESSAGE,
     insert_paper_trade_decision,
+    load_paper_trade_decisions,
+    load_scan_runs,
     persistence_health_check,
     update_alert_paper_trade_status,
     update_alert_telegram_status,
@@ -103,6 +109,11 @@ def parse_args() -> argparse.Namespace:
         "--strategy-performance-report",
         action="store_true",
         help="Print a strategy performance comparison report and exit.",
+    )
+    parser.add_argument(
+        "--live-readiness-report",
+        action="store_true",
+        help="Print paper-trading maturity and live-readiness governance report.",
     )
     parser.add_argument(
         "--send-strategy-performance-report",
@@ -518,6 +529,20 @@ def main() -> None:
         paper_trades = load_all_paper_trades()
         report = build_strategy_performance_report(paper_trades)
         print(format_strategy_performance_report(report))
+        return
+
+    if args.live_readiness_report:
+        paper_trades = load_all_paper_trades()
+        paper_trade_decisions = load_paper_trade_decisions() if USE_SUPABASE else []
+        scan_runs = load_scan_runs() if USE_SUPABASE else []
+        alert_history = load_alert_history()
+        report = build_live_readiness_report(
+            paper_trades,
+            paper_trade_decisions,
+            scan_runs,
+            alert_history,
+        )
+        print(format_live_readiness_report(report))
         return
 
     if args.send_strategy_performance_report:

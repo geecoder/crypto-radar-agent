@@ -20,6 +20,7 @@ from app.trading.strategy_config import (
     get_parabolic_paper_strategy,
     get_speculative_early_runner_strategy,
 )
+from app.utils.logger import get_logger
 
 PAPER_TRADES_FILE = "data/paper_trades.json"
 PAPER_TRADE_EVENTS_FILE = "data/paper_trade_events.json"
@@ -40,6 +41,7 @@ SPECULATIVE_EARLY_RUNNER_TRADE_PLAN_TYPE = "speculative_early_runner"
 PARABOLIC_TRADE_PLAN_TYPE = "parabolic_high_risk_paper"
 PARABOLIC_MIN_24H_CHANGE_PCT = 40
 PARABOLIC_MIN_QUOTE_VOLUME = 5_000_000
+logger = get_logger(__name__)
 
 
 def build_paper_trade_from_alert(
@@ -493,7 +495,10 @@ def update_open_paper_trades(client) -> dict:
         try:
             klines = client.get_klines(symbol, "15m", 500)
             candles = klines_to_dataframe(klines)
-            updates = evaluate_open_paper_trade(trade, candles)
+            updates = _build_stale_paper_trade_updates(trade, candles)
+
+            if updates is None:
+                updates = evaluate_open_paper_trade(trade, candles)
         except Exception:
             still_open += 1
             continue
@@ -502,6 +507,8 @@ def update_open_paper_trades(client) -> dict:
             _update_paper_trade(str(trade.get("id")), updates)
             closed_trade = {**trade, **updates}
             _insert_paper_trade_event(_build_trade_event(closed_trade, "closed"))
+            if updates.get("exit_reason") == "max_hold_expired":
+                logger.info("Closed stale paper trade due to max hold: %s", symbol)
             closed_trades += 1
         else:
             still_open += 1
@@ -632,6 +639,63 @@ def _build_close_updates(
         "pnl_pct": round(pnl_pct, 2),
         "pnl_amount": round(position_size * (pnl_pct / 100), 2),
     }
+
+
+def _build_stale_paper_trade_updates(trade: dict, candles_df) -> dict | None:
+    """Build forced max-hold close updates using the latest available close."""
+    if not _is_paper_trade_past_max_hold(trade):
+        return None
+
+    if _safe_float(trade.get("entry_price"), default=None) is None:
+        return None
+
+    latest_candle = _latest_available_candle(candles_df)
+
+    if latest_candle is None:
+        return None
+
+    latest_close = _safe_float(latest_candle.get("close"), default=None)
+
+    if latest_close is None:
+        return None
+
+    closed_at = _row_timestamp(latest_candle) or datetime.now(timezone.utc)
+
+    return _build_close_updates(
+        trade,
+        latest_close,
+        "max_hold_expired",
+        closed_at,
+    )
+
+
+def _is_paper_trade_past_max_hold(trade: dict) -> bool:
+    """Return whether an open paper trade has exceeded its max hold window."""
+    opened_at = _parse_timestamp(trade.get("opened_at"))
+
+    if opened_at is None:
+        return False
+
+    max_hold_hours = _safe_float(trade.get("max_hold_hours"), default=48) or 48
+    expires_at = opened_at + timedelta(hours=max_hold_hours)
+
+    return datetime.now(timezone.utc) >= expires_at
+
+
+def _latest_available_candle(candles_df):
+    """Return the newest candle row available from a candle DataFrame."""
+    if candles_df is None or candles_df.empty:
+        return None
+
+    candles = candles_df.copy()
+    time_column = "open_time" if "open_time" in candles.columns else "close_time"
+
+    if time_column in candles.columns:
+        candle_times = pd.to_datetime(candles[time_column], utc=True, errors="coerce")
+        candles = candles.assign(_paper_trade_time=candle_times)
+        candles = candles.sort_values("_paper_trade_time")
+
+    return candles.iloc[-1]
 
 
 def _candles_after_opened_at(candles_df, opened_at: datetime) -> pd.DataFrame:

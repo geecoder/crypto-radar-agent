@@ -114,7 +114,7 @@ def test_speculative_early_runner_strategy_values() -> None:
     strategy = get_speculative_early_runner_strategy()
 
     assert strategy.name == "speculative_early_runner_paper"
-    assert strategy.minimum_opportunity_score == 0
+    assert strategy.minimum_opportunity_score == 50
     assert strategy.min_move_from_recent_low_pct == 5
     assert strategy.max_move_from_recent_low_pct == 20
     assert strategy.allow_thin_liquidity is True
