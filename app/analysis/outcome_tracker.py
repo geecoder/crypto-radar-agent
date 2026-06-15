@@ -193,11 +193,27 @@ def _build_outcome_record(alert: dict, highest_price: float | None) -> dict:
     return outcome
 
 
-def check_alert_outcomes(alert_history: list[dict], client) -> list[dict]:
-    """Check saved alert history against current public market data."""
+def check_alert_outcomes(
+    alert_history: list[dict],
+    client,
+    deadline: datetime | None = None,
+) -> list[dict]:
+    """Check saved alert history against current public market data.
+
+    If *deadline* is given, processing stops gracefully before that time so
+    the caller can save whatever was completed.
+    """
     outcomes = []
 
-    for alert in alert_history:
+    for i, alert in enumerate(alert_history):
+        if deadline is not None and datetime.now(timezone.utc) >= deadline:
+            remaining = len(alert_history) - i
+            print(
+                f"Time budget reached after {i} alerts "
+                f"({remaining} remaining — will continue next run)."
+            )
+            break
+
         symbol = alert.get("symbol")
 
         if not symbol:

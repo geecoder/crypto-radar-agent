@@ -1,7 +1,7 @@
 """Application entry point for the Crypto Radar Agent."""
 
 import argparse
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import os
 
 from app.alerts.alert_history import append_alert_history, load_alert_history
@@ -56,6 +56,7 @@ from app.storage.supabase_store import (
     insert_paper_trade_decision,
     load_paper_trade_decisions,
     load_scan_runs,
+    load_unchecked_alert_history,
     persistence_health_check,
     update_alert_paper_trade_status,
     update_alert_telegram_status,
@@ -83,6 +84,27 @@ def parse_args() -> argparse.Namespace:
         "--check-outcomes",
         action="store_true",
         help="Check saved alert history outcomes and exit.",
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        metavar="N",
+        help=(
+            "Maximum number of unchecked outcomes to process per run "
+            "(used with --check-outcomes; prioritises rows where "
+            "last_checked_at IS NULL)."
+        ),
+    )
+    parser.add_argument(
+        "--max-minutes",
+        type=float,
+        default=None,
+        metavar="M",
+        help=(
+            "Stop processing and save progress after M minutes "
+            "(used with --check-outcomes to avoid GitHub Actions timeout)."
+        ),
     )
     parser.add_argument(
         "--performance-report",
@@ -492,10 +514,30 @@ def main() -> None:
         return
 
     if args.check_outcomes:
+        limit = args.limit
+        max_minutes = args.max_minutes
+        deadline = (
+            datetime.now(timezone.utc) + timedelta(minutes=max_minutes)
+            if max_minutes is not None
+            else None
+        )
+
+        if deadline is not None:
+            print(f"Time budget: {max_minutes} minutes (deadline {deadline.strftime('%H:%M:%S')} UTC).")
+
         try:
-            alert_history = load_alert_history()
+            if USE_SUPABASE:
+                alert_history = load_unchecked_alert_history(limit=limit)
+            else:
+                alert_history = load_alert_history(limit=limit)
+
+            if not alert_history:
+                print("No unchecked outcomes found — nothing to process.")
+                return
+
+            print(f"Loaded {len(alert_history)} unchecked alert(s) to process.")
             client = BinancePublicClient()
-            outcomes = check_alert_outcomes(alert_history, client)
+            outcomes = check_alert_outcomes(alert_history, client, deadline=deadline)
             save_alert_outcomes(outcomes)
         except RuntimeError as error:
             if str(error) == INVALID_SUPABASE_DATABASE_URL_MESSAGE:
@@ -505,7 +547,7 @@ def main() -> None:
             raise
 
         print("Outcome check completed.")
-        print(f"Alerts checked: {len(alert_history)}")
+        print(f"Alerts checked: {len(outcomes)}")
         print(f"Outcomes saved: {len(outcomes)}")
         print(f"Hit +5%: {_count_hit(outcomes, 5)}")
         print(f"Hit +10%: {_count_hit(outcomes, 10)}")

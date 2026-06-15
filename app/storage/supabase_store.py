@@ -795,6 +795,135 @@ def load_alert_history(limit: int | None = None) -> list[dict]:
     return [_alert_history_row_to_record(row) for row in rows]
 
 
+def load_unchecked_alert_history(limit: int | None = None) -> list[dict]:
+    """Load alert history rows that have no outcome or an unchecked outcome stub.
+
+    Rows are ordered so that never-checked alerts (no outcome row, or a
+    backfilled stub with last_checked_at IS NULL) come first, then oldest
+    last_checked_at.  Supply a limit to cap how many are returned per batch.
+    """
+    connection = get_connection()
+
+    if limit is not None:
+        limit = max(0, int(limit))
+
+    try:
+        with connection:
+            with connection.cursor(cursor_factory=RealDictCursor) as cursor:
+                if limit is None:
+                    cursor.execute(
+                        """
+                        SELECT
+                            ah.id,
+                            ah.symbol,
+                            ah.alerted_at,
+                            ah.latest_close,
+                            ah.opportunity_score,
+                            ah.classification,
+                            ah.target_bucket,
+                            ah.continuation_target,
+                            ah.move_stage,
+                            ah.move_from_recent_low_pct,
+                            ah.liquidity_label,
+                            ah.exhaustion_risk_level,
+                            ah.risk_level,
+                            ah.alert_type,
+                            ah.confidence,
+                            ah.potential_bucket,
+                            ah.reason,
+                            ah.summary,
+                            ah.recent_price_changes,
+                            ah.volume_acceleration,
+                            ah.explosive_mover,
+                            ah.trade_plan,
+                            ah.trade_plan_type,
+                            ah.should_paper_trade,
+                            ah.scan_run_id,
+                            ah.source,
+                            ah.component_scores,
+                            ah.volume_signal,
+                            ah.momentum_signal,
+                            ah.breakout_signal,
+                            ah.trend_signal,
+                            ah.volatility_signal,
+                            ah.telegram_sent,
+                            ah.telegram_error,
+                            ah.paper_trade_created,
+                            ah.paper_trade_id,
+                            ah.paper_trade_skip_reason,
+                            ah.created_at
+                        FROM alert_history ah
+                        LEFT JOIN alert_outcomes ao ON ao.alert_id = ah.id
+                        WHERE ao.alert_id IS NULL
+                           OR ao.last_checked_at IS NULL
+                        ORDER BY
+                            ao.last_checked_at ASC NULLS FIRST,
+                            ah.alerted_at ASC,
+                            ah.id ASC
+                        """
+                    )
+                else:
+                    cursor.execute(
+                        """
+                        SELECT
+                            ah.id,
+                            ah.symbol,
+                            ah.alerted_at,
+                            ah.latest_close,
+                            ah.opportunity_score,
+                            ah.classification,
+                            ah.target_bucket,
+                            ah.continuation_target,
+                            ah.move_stage,
+                            ah.move_from_recent_low_pct,
+                            ah.liquidity_label,
+                            ah.exhaustion_risk_level,
+                            ah.risk_level,
+                            ah.alert_type,
+                            ah.confidence,
+                            ah.potential_bucket,
+                            ah.reason,
+                            ah.summary,
+                            ah.recent_price_changes,
+                            ah.volume_acceleration,
+                            ah.explosive_mover,
+                            ah.trade_plan,
+                            ah.trade_plan_type,
+                            ah.should_paper_trade,
+                            ah.scan_run_id,
+                            ah.source,
+                            ah.component_scores,
+                            ah.volume_signal,
+                            ah.momentum_signal,
+                            ah.breakout_signal,
+                            ah.trend_signal,
+                            ah.volatility_signal,
+                            ah.telegram_sent,
+                            ah.telegram_error,
+                            ah.paper_trade_created,
+                            ah.paper_trade_id,
+                            ah.paper_trade_skip_reason,
+                            ah.created_at
+                        FROM alert_history ah
+                        LEFT JOIN alert_outcomes ao ON ao.alert_id = ah.id
+                        WHERE ao.alert_id IS NULL
+                           OR ao.last_checked_at IS NULL
+                        ORDER BY
+                            ao.last_checked_at ASC NULLS FIRST,
+                            ah.alerted_at ASC,
+                            ah.id ASC
+                        LIMIT %s
+                        """,
+                        (limit,),
+                    )
+
+                rows = cursor.fetchall()
+    finally:
+        connection.close()
+
+    return [_alert_history_row_to_record(row) for row in rows]
+
+
 def update_alert_telegram_status(
     alert_history_id: str | None,
     sent: bool,
