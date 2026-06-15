@@ -362,15 +362,29 @@ def _speculative_early_runner_paper_eligibility(result: dict) -> tuple[bool, str
             "Rejected speculative runner: alert type is not Speculative Early Runner Alert.",
         )
 
-    if opportunity_score is None or opportunity_score < 40:
+    if opportunity_score is None:
+        return False, "Rejected speculative runner: opportunity score is missing."
+
+    # Low-signal coins (score < 40) are eligible when the move and volume
+    # confirm a real runner: move_pct > 8% and volume_acceleration_2h >= 1.5x.
+    low_signal_override = (
+        move_pct is not None and move_pct > 8 and volume_acceleration_2h >= 1.5
+    )
+    if opportunity_score < 40 and not low_signal_override:
         return False, "Rejected speculative runner: opportunity score below 40."
 
-    if classification.lower() == "ignore":
-        return False, "Rejected speculative runner: classification is Ignore."
-
-    # "No clear upside setup" is allowed for paper-only simulation when score >= 50.
-    if target_bucket.lower() == "no clear upside setup" and opportunity_score < 50:
-        return False, "Rejected speculative runner: target bucket has no clear upside setup and score below 50."
+    # "No clear upside setup" is allowed when score >= 50 or when the low-signal
+    # override is active (strong move + volume acceleration compensates).
+    if (
+        target_bucket.lower() == "no clear upside setup"
+        and opportunity_score < 50
+        and not low_signal_override
+    ):
+        return (
+            False,
+            "Rejected speculative runner: target bucket has no clear upside setup "
+            "and score below 50.",
+        )
 
     # Very thin liquidity is allowed for speculative paper-only simulation.
 

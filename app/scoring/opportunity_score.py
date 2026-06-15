@@ -37,7 +37,7 @@ def _classify_score(score: int) -> str:
         return "Early signal"
     if score >= 40:
         return "Weak signal"
-    return "Ignore"
+    return "Low signal"
 
 
 def _get_target_bucket(score: int, momentum_score: int, breakout_score: int) -> str:
@@ -114,14 +114,14 @@ def calculate_opportunity_score(
     exhaustion_risk_score = _safe_risk_score(exhaustion_signal)
 
     raw_score = (
-        (volume_score * 0.20)
-        + (momentum_score * 0.20)
-        + (breakout_score * 0.15)
+        (volume_score * 0.22)
+        + (momentum_score * 0.18)
+        + (breakout_score * 0.12)
         + (trend_score * 0.15)
         + (volatility_score * 0.10)
-        + (move_stage_score * 0.15)
-        + (liquidity_score * 0.05)
-        - (exhaustion_risk_score * 0.20)
+        + (move_stage_score * 0.20)
+        + (liquidity_score * 0.03)
+        - (exhaustion_risk_score * 0.10)
     )
     opportunity_score = max(0, min(round(raw_score), 100))
     classification = _classify_score(opportunity_score)
