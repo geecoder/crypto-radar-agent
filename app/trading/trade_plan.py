@@ -357,25 +357,31 @@ def _speculative_early_runner_paper_eligibility(result: dict) -> tuple[bool, str
     )
 
     if alert_type != "Speculative Early Runner Alert":
-        return False, "Rejected speculative runner: alert type is not Speculative Early Runner Alert."
+        return (
+            False,
+            "Rejected speculative runner: alert type is not Speculative Early Runner Alert.",
+        )
 
-    if opportunity_score is None or opportunity_score < 50:
-        return False, "Rejected speculative runner: opportunity score below 50."
+    if opportunity_score is None or opportunity_score < 40:
+        return False, "Rejected speculative runner: opportunity score below 40."
 
     if classification.lower() == "ignore":
         return False, "Rejected speculative runner: classification is Ignore."
 
-    if target_bucket.lower() == "no clear upside setup":
-        return False, "Rejected speculative runner: target bucket has no clear upside setup."
+    # "No clear upside setup" is allowed for paper-only simulation when score >= 50.
+    if target_bucket.lower() == "no clear upside setup" and opportunity_score < 50:
+        return False, "Rejected speculative runner: target bucket has no clear upside setup and score below 50."
 
-    if liquidity_label.lower() == "very thin":
-        return False, "Rejected speculative runner: liquidity is Very thin."
+    # Very thin liquidity is allowed for speculative paper-only simulation.
 
     if exhaustion_level.lower() == "high":
         return False, "Rejected speculative runner: exhaustion risk is High."
 
     if move_pct is None or move_pct < 5 or move_pct > 20:
-        return False, "Rejected speculative runner: move from recent low must be between 5% and 20%."
+        return (
+            False,
+            "Rejected speculative runner: move from recent low must be between 5% and 20%.",
+        )
 
     if not (volume_acceleration_1h >= 2 or volume_acceleration_2h >= 2):
         return False, "Rejected speculative runner: volume acceleration below 2x."

@@ -170,8 +170,8 @@ def select_priority_symbols(
 def select_scan_universe(
     active_symbols: list[str],
     tickers_24hr: list[dict],
-    max_priority_symbols: int = 50,
-    max_universe_symbols: int = 150,
+    max_priority_symbols: int = 75,
+    max_universe_symbols: int = 300,
 ) -> list[str]:
     """Select an expanded scan universe including liquid names and top movers."""
     active_symbol_set = set(active_symbols)
@@ -214,7 +214,7 @@ def select_scan_universe(
                 item["symbol"],
             ),
             reverse=True,
-        )[:50]
+        )[:75]
     ]
     high_movers = [
         item["symbol"]
@@ -225,13 +225,27 @@ def select_scan_universe(
         item["symbol"]
         for item in eligible_tickers
         if item["quote_volume"] >= 5_000_000
-        and item["price_change_percent"] >= 5
+        and item["price_change_percent"] >= 3
     ]
     speculative_early_runners = [
         item["symbol"]
         for item in eligible_tickers
         if item["quote_volume"] >= 1_000_000
-        and item["price_change_percent"] >= 5
+        and item["price_change_percent"] >= 3
+    ]
+    # Liquid background: top coins by volume regardless of daily price change.
+    # Catches consolidating blue-chips that may still have strong intraday setups.
+    liquid_background = [
+        item["symbol"]
+        for item in sorted(
+            (
+                item
+                for item in eligible_tickers
+                if item["quote_volume"] >= 10_000_000
+            ),
+            key=lambda item: (item["quote_volume"], item["count"], item["symbol"]),
+            reverse=True,
+        )[:150]
     ]
 
     return _dedupe_preserve_order(
@@ -241,6 +255,7 @@ def select_scan_universe(
             + high_movers
             + liquid_movers
             + speculative_early_runners
+            + liquid_background
         ),
         max_symbols=max_universe_symbols,
     )

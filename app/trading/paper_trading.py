@@ -43,7 +43,7 @@ PARABOLIC_MIN_24H_CHANGE_PCT = 40
 PARABOLIC_MIN_QUOTE_VOLUME = 5_000_000
 MAX_OPEN_PAPER_TRADES_BY_ALERT_TYPE = {
     SPECULATIVE_EARLY_RUNNER_ALERT_TYPE: 5,
-    PARABOLIC_WATCH_ALERT_TYPE: 3,
+    PARABOLIC_WATCH_ALERT_TYPE: 10,
     "Continuation Alert": 10,
 }
 MAX_TOTAL_OPEN_PAPER_TRADES = 20
@@ -128,11 +128,6 @@ def should_create_paper_trade(
     if alert_type not in PAPER_TRADE_ALLOWED_ALERT_TYPES:
         return False, f"{alert_type} is not eligible for paper trading."
 
-    trade_plan = _get_trade_plan(result)
-
-    if trade_plan and not trade_plan.get("should_paper_trade", False):
-        return False, "Trade plan does not allow paper trading."
-
     opportunity_score = _safe_float(_get_opportunity_value(result, "opportunity_score"))
 
     if opportunity_score < strategy.minimum_opportunity_score:
@@ -162,16 +157,8 @@ def should_create_paper_trade(
 
     liquidity_label = str(_get_liquidity_label(result) or "").strip()
 
-    if not strategy.allow_thin_liquidity and liquidity_label.lower() in {
-        "thin",
-        "very thin",
-    }:
-        return False, "Liquidity is too thin for a paper trade."
-
-    continuation_target = _get_continuation_target(result)
-
-    if continuation_target not in ALLOWED_CONTINUATION_TARGETS:
-        return False, "Continuation target is not eligible for paper trading."
+    if not strategy.allow_thin_liquidity and liquidity_label.lower() == "very thin":
+        return False, "Liquidity is Very thin."
 
     return True, "Paper trade eligible."
 
@@ -565,7 +552,13 @@ def update_open_paper_trades(client) -> dict:
 
             if updates is None:
                 updates = evaluate_open_paper_trade(trade, candles)
-        except Exception:
+        except Exception as exc:
+            logger.warning(
+                "Failed to update paper trade for %s (id=%s): %s",
+                symbol,
+                trade.get("id"),
+                exc,
+            )
             still_open += 1
             errors += 1
             continue

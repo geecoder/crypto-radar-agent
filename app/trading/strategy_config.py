@@ -25,10 +25,10 @@ def get_default_paper_trading_strategy() -> PaperTradingStrategy:
     """Return the default momentum-continuation paper trading strategy."""
     return PaperTradingStrategy(
         name="default_momentum_continuation",
-        minimum_opportunity_score=65,
+        minimum_opportunity_score=55,
         min_move_from_recent_low_pct=3,
         max_move_from_recent_low_pct=20,
-        allow_thin_liquidity=False,
+        allow_thin_liquidity=True,
         allow_high_exhaustion=False,
         stop_loss_pct=-5,
         take_profit_1_pct=8,
@@ -97,7 +97,7 @@ def get_speculative_early_runner_strategy() -> PaperTradingStrategy:
     """Return the high-risk speculative early-runner paper-only strategy."""
     return PaperTradingStrategy(
         name="speculative_early_runner_paper",
-        minimum_opportunity_score=50,
+        minimum_opportunity_score=40,
         min_move_from_recent_low_pct=5,
         max_move_from_recent_low_pct=20,
         allow_thin_liquidity=True,

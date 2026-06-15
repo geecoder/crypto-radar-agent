@@ -142,6 +142,7 @@ def _build_outcome_record(alert: dict, highest_price: float | None) -> dict:
     """Build one outcome record from an alert history record."""
     checked_at = datetime.now(timezone.utc).isoformat()
     latest_close = alert.get("latest_close")
+    opportunity = alert.get("opportunity") or {}
     outcome = {
         "alert_id": alert.get("id"),
         "symbol": alert.get("symbol"),
@@ -150,6 +151,20 @@ def _build_outcome_record(alert: dict, highest_price: float | None) -> dict:
         "alert_latest_close": latest_close,
         "highest_price": highest_price,
         "highest_return_pct": None,
+        # Copied from alert_history at outcome-creation time.
+        "opportunity_score": (
+            alert.get("opportunity_score")
+            or opportunity.get("opportunity_score")
+        ),
+        "classification": (
+            alert.get("classification")
+            or opportunity.get("classification")
+        ),
+        "target_bucket": (
+            alert.get("target_bucket")
+            or opportunity.get("target_bucket")
+        ),
+        "risk_level": alert.get("risk_level") or alert.get("alert_type"),
     }
 
     for threshold in HIT_THRESHOLDS:

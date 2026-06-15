@@ -1,0 +1,17 @@
+{
+    "permissions": {
+        "allow": [
+            "PowerShell($pw = Get-Command playwright -ErrorAction SilentlyContinue; $pw.Source)",
+            "PowerShell(npm list -g playwright 2>&1; \\(Get-Item \"$env:APPDATA\\\\npm\\\\playwright.cmd\" -ErrorAction SilentlyContinue\\).FullName)",
+            "Bash(playwright --version)",
+            "Bash(node --experimental-vm-modules test-interview.mjs)",
+            "Read(//tmp/**)",
+            "Read(//c/tmp/**)",
+            "Bash(rm -f /c/Users/genes/upthrust-portal/test-interview.mjs && echo \"cleaned\")",
+            "Bash(npm uninstall *)"
+        ],
+        "additionalDirectories": [
+            "C:\\Users\\genes\\upthrust-portal"
+        ]
+    }
+}

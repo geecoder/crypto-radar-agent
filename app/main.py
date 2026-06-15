@@ -332,8 +332,8 @@ def _run_normal_scan(args: argparse.Namespace, paper_strategy, scan_run_id: str 
     scan_universe = select_scan_universe(
         active_symbols,
         tickers_24hr,
-        max_priority_symbols=50,
-        max_universe_symbols=150,
+        max_priority_symbols=75,
+        max_universe_symbols=300,
     )
 
     print(f"Total active USDT symbols: {len(active_symbols)}")

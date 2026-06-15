@@ -1,0 +1,99 @@
+name: Crypto Radar Watchdog
+
+# Fires every 4 hours and triggers the main scanner if it has not run
+# within the last 3 hours. Guards against GitHub Actions cron throttling.
+
+on:
+  schedule:
+    - cron: "0 */4 * * *"
+  workflow_dispatch:
+
+jobs:
+  watchdog:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+      SUPABASE_DATABASE_URL: ${{ secrets.SUPABASE_DATABASE_URL }}
+      PERSISTENCE_BACKEND: supabase
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Check last scan run age
+        id: check_age
+        run: |
+          python - <<'EOF'
+          import os
+          import sys
+          from datetime import datetime, timezone, timedelta
+
+          try:
+              from app.storage.supabase_store import load_scan_runs
+              runs = load_scan_runs()
+          except Exception as e:
+              print(f"Could not load scan runs: {e}")
+              # Trigger a scan if we cannot determine the last run.
+              print("trigger=true")
+              with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+                  f.write("trigger=true\n")
+              sys.exit(0)
+
+          if not runs:
+              print("No scan runs found — triggering scan.")
+              with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+                  f.write("trigger=true\n")
+              sys.exit(0)
+
+          # Find the most recent completed scan.
+          timestamps = []
+          for run in runs:
+              ts = run.get("completed_at") or run.get("timestamp") or run.get("created_at")
+              if ts:
+                  try:
+                      dt = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+                      timestamps.append(dt)
+                  except ValueError:
+                      pass
+
+          if not timestamps:
+              print("No parseable timestamps — triggering scan.")
+              with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+                  f.write("trigger=true\n")
+              sys.exit(0)
+
+          latest = max(timestamps)
+          age = datetime.now(timezone.utc) - latest
+          threshold = timedelta(hours=3)
+
+          print(f"Last scan: {latest.isoformat()}  Age: {age}  Threshold: {threshold}")
+
+          if age > threshold:
+              print(f"Last scan is {age} ago — triggering new scan.")
+              with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+                  f.write("trigger=true\n")
+          else:
+              print("Last scan is recent — no trigger needed.")
+              with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+                  f.write("trigger=false\n")
+          EOF
+
+      - name: Trigger main scanner
+        if: steps.check_age.outputs.trigger == 'true'
+        run: |
+          gh workflow run crypto-radar.yml \
+            --repo "${{ github.repository }}" \
+            --ref "${{ github.ref_name }}"
