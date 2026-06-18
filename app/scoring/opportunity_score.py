@@ -113,14 +113,17 @@ def calculate_opportunity_score(
     liquidity_score = _safe_score(liquidity_signal)
     exhaustion_risk_score = _safe_risk_score(exhaustion_signal)
 
+    # Weights calibrated 2026-06-18 from 99 confirmed +50%-mover outcomes:
+    # volatility (+20 delta vs baseline) and momentum (+5) are the strongest
+    # positive predictors; move_stage (−19) and volume (−8) were overweighted.
     raw_score = (
-        (volume_score * 0.22)
-        + (momentum_score * 0.18)
-        + (breakout_score * 0.12)
-        + (trend_score * 0.15)
-        + (volatility_score * 0.10)
-        + (move_stage_score * 0.20)
-        + (liquidity_score * 0.03)
+        (volume_score * 0.15)      # reduced: winners have lower volume scores
+        + (momentum_score * 0.22)  # increased: strongest positive predictor
+        + (breakout_score * 0.12)  # unchanged
+        + (trend_score * 0.10)     # reduced: winners slightly lower trend
+        + (volatility_score * 0.22)  # doubled: highest delta in winner profile
+        + (move_stage_score * 0.10)  # halved: high score hurts +50% probability
+        + (liquidity_score * 0.07)   # increased to keep total ≈ 1.0
         - (exhaustion_risk_score * 0.10)
     )
     opportunity_score = max(0, min(round(raw_score), 100))

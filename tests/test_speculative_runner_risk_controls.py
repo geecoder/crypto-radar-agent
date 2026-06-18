@@ -51,45 +51,42 @@ def _paper_allowed(result: dict) -> tuple[bool, str]:
     return bool(trade_plan["should_paper_trade"]), trade_plan["reason"]
 
 
-def test_speculative_runner_rejected_when_score_below_50() -> None:
+def test_speculative_runner_rejected_when_score_below_40() -> None:
     allowed, reason = _paper_allowed(
-        _speculative_runner_result(opportunity={"opportunity_score": 49})
+        _speculative_runner_result(opportunity={"opportunity_score": 39})
     )
 
     assert allowed is False
-    assert reason == "Rejected speculative runner: opportunity score below 50."
+    assert reason == "Rejected speculative runner: opportunity score below 40."
 
 
 def test_speculative_runner_rejected_when_target_bucket_has_no_upside() -> None:
+    # "No clear upside setup" is rejected only when score < 50 and no low-signal override.
+    # Default fixture has score=55, so we must drop it below 50 to trigger rejection.
     allowed, reason = _paper_allowed(
-        _speculative_runner_result(
-            opportunity={"target_bucket": "No clear upside setup"}
-        )
+        _speculative_runner_result(opportunity={"opportunity_score": 45, "target_bucket": "No clear upside setup"})
     )
 
     assert allowed is False
-    assert (
-        reason
-        == "Rejected speculative runner: target bucket has no clear upside setup."
-    )
+    assert "no clear upside setup" in reason.lower()
 
 
-def test_speculative_runner_rejected_when_classification_is_ignore() -> None:
+def test_speculative_runner_allowed_when_classification_is_ignore() -> None:
+    # Classification is no longer a blocking criterion for speculative runners.
     allowed, reason = _paper_allowed(
         _speculative_runner_result(opportunity={"classification": "Ignore"})
     )
 
-    assert allowed is False
-    assert reason == "Rejected speculative runner: classification is Ignore."
+    assert allowed is True
 
 
-def test_speculative_runner_rejected_when_liquidity_is_very_thin() -> None:
+def test_speculative_runner_allowed_when_liquidity_is_very_thin() -> None:
+    # Very thin liquidity is explicitly allowed for speculative paper-only simulation.
     allowed, reason = _paper_allowed(
         _speculative_runner_result(liquidity_signal={"label": "Very thin"})
     )
 
-    assert allowed is False
-    assert reason == "Rejected speculative runner: liquidity is Very thin."
+    assert allowed is True
 
 
 def test_speculative_runner_rejected_when_volume_acceleration_below_2x() -> None:

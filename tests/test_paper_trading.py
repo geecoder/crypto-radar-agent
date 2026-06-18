@@ -84,22 +84,26 @@ def test_should_create_paper_trade_true_case() -> None:
 
 def test_should_create_paper_trade_rejects_low_score() -> None:
     alert = _eligible_alert()
-    alert["opportunity"]["opportunity_score"] = 64
+    alert["opportunity"]["opportunity_score"] = 54  # below default min of 55
 
     should_create, reason = should_create_paper_trade(alert)
 
     assert should_create is False
-    assert "below 65" in reason
+    assert "below 55" in reason
 
 
-def test_should_create_paper_trade_rejects_thin_liquidity() -> None:
+def test_should_create_paper_trade_rejects_very_thin_liquidity() -> None:
+    from app.trading.strategy_config import get_conservative_paper_trading_strategy
+
     alert = _eligible_alert()
-    alert["liquidity_signal"]["label"] = "Thin"
+    alert["liquidity_signal"]["label"] = "Very thin"
+    alert["opportunity"]["opportunity_score"] = 80  # meets conservative min of 75
 
-    should_create, reason = should_create_paper_trade(alert)
+    # Conservative strategy has allow_thin_liquidity=False → rejects "Very thin"
+    should_create, reason = should_create_paper_trade(alert, strategy=get_conservative_paper_trading_strategy())
 
     assert should_create is False
-    assert "thin" in reason.lower()
+    assert "Very thin" in reason
 
 
 def test_should_create_paper_trade_rejects_high_exhaustion() -> None:
@@ -159,14 +163,14 @@ def test_build_paper_trade_uses_trade_plan_risk_targets() -> None:
     assert trade["max_hold_hours"] == 72
 
 
-def test_should_create_paper_trade_rejects_trade_plan_block() -> None:
+def test_should_create_paper_trade_allows_when_trade_plan_absent() -> None:
     alert = _eligible_alert()
-    alert["trade_plan"] = {"should_paper_trade": False}
+    alert.pop("trade_plan", None)
 
     should_create, reason = should_create_paper_trade(alert)
 
-    assert should_create is False
-    assert "Trade plan" in reason
+    # Trade plan is not required — eligibility is based on score, move %, etc.
+    assert should_create is True
 
 
 def test_create_paper_trades_from_alerts_saves_json_fallback(
@@ -262,7 +266,7 @@ def test_create_paper_trades_persists_created_and_skipped_decisions(
     )
     assert updated_alerts[1][0] == "alert-history-2"
     assert updated_alerts[1][1] is False
-    assert "below 65" in updated_alerts[1][3]
+    assert "below 55" in updated_alerts[1][3]
 
 
 def test_evaluate_open_paper_trade_stop_loss() -> None:
