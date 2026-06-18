@@ -1613,6 +1613,30 @@ def get_open_paper_trades() -> list[dict]:
     return [_paper_trade_row_to_record(row) for row in rows]
 
 
+def get_closed_paper_trades_since(cutoff_iso: str) -> list[dict]:
+    """Return closed paper trades with closed_at >= cutoff_iso (for drawdown gate)."""
+    connection = get_connection()
+
+    try:
+        with connection:
+            with connection.cursor(cursor_factory=RealDictCursor) as cursor:
+                cursor.execute(
+                    """
+                    SELECT id, symbol, closed_at, pnl_pct, pnl_amount,
+                           exit_reason, simulated_position_size
+                    FROM paper_trades
+                    WHERE status = 'closed' AND closed_at >= %s
+                    ORDER BY closed_at DESC
+                    """,
+                    (cutoff_iso,),
+                )
+                rows = cursor.fetchall()
+    finally:
+        connection.close()
+
+    return [dict(row) for row in rows]
+
+
 def update_paper_trade(trade_id: str, updates: dict) -> None:
     """Update a simulated paper trade by ID."""
     if not trade_id:

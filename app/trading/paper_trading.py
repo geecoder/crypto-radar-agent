@@ -13,6 +13,7 @@ import pandas as pd
 
 from app.binance.client import klines_to_dataframe
 from app.config import USE_SUPABASE
+from app.risk.risk_manager import RiskConfig, evaluate_trade_risk
 from app.storage import supabase_store
 from app.trading.strategy_config import (
     PaperTradingStrategy,
@@ -280,11 +281,13 @@ def can_create_more_trades_for_alert_type(
 def create_paper_trades_from_alerts(
     alert_candidates: list[dict],
     strategy: PaperTradingStrategy | None = None,
+    risk_config: RiskConfig | None = None,
 ) -> list[dict]:
     """Create paper trades and return one structured decision per alert."""
     strategy = strategy or get_default_paper_trading_strategy()
     decisions = []
     open_trades = _get_open_paper_trades()
+    closed_trades_today = _get_closed_paper_trades_today()
     open_trade_symbols = {
         str(trade.get("symbol"))
         for trade in open_trades
@@ -371,6 +374,29 @@ def create_paper_trades_from_alerts(
                     "paper_trade_id": None,
                     "decision": "duplicate",
                     "reason": f"Duplicate open paper trade exists for {symbol}.",
+                }
+            )
+            _persist_paper_trade_decision(decision)
+            _update_alert_paper_trade_status(decision)
+            decisions.append(decision)
+            continue
+
+        # Portfolio-level risk gates (position limit, capital cap, drawdown, correlation).
+        risk_decision = evaluate_trade_risk(
+            symbol=symbol,
+            stop_loss_pct=float(selected_strategy.stop_loss_pct or -10),
+            open_trades=open_trades,
+            closed_trades_today=closed_trades_today,
+            config=risk_config,
+        )
+        if not risk_decision.allowed:
+            decision.update(
+                {
+                    "paper_trade_created": False,
+                    "paper_trade_id": None,
+                    "decision": "skipped",
+                    "eligible": False,
+                    "reason": f"Risk gate blocked: {risk_decision.reason}",
                 }
             )
             _persist_paper_trade_decision(decision)
@@ -698,6 +724,24 @@ def _get_open_paper_trades() -> list[dict]:
         trade
         for trade in _load_json_list(PAPER_TRADES_FILE)
         if trade.get("status") == "open"
+    ]
+
+
+def _get_closed_paper_trades_today() -> list[dict]:
+    """Load paper trades closed in the last 24 h (for daily drawdown gate)."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+
+    if USE_SUPABASE:
+        try:
+            return supabase_store.get_closed_paper_trades_since(cutoff)
+        except Exception:
+            return []
+
+    return [
+        trade
+        for trade in _load_json_list(PAPER_TRADES_FILE)
+        if trade.get("status") == "closed"
+        and str(trade.get("closed_at") or "") >= cutoff
     ]
 
 
