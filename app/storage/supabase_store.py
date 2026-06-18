@@ -447,6 +447,16 @@ def _ensure_tables(connection) -> None:
             ADD COLUMN IF NOT EXISTS last_price NUMERIC
             """
         )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS system_health (
+                id BIGSERIAL PRIMARY KEY,
+                scan_type TEXT NOT NULL,
+                completed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                metadata JSONB
+            )
+            """
+        )
 
     connection.commit()
 
@@ -609,6 +619,87 @@ def upsert_alert_state(
                 )
     finally:
         connection.close()
+
+
+def write_system_health(scan_type: str, metadata: dict | None = None) -> None:
+    """Record a successful scan heartbeat to system_health."""
+    connection = get_connection()
+
+    try:
+        with connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    INSERT INTO system_health (scan_type, metadata)
+                    VALUES (%s, %s)
+                    """,
+                    (scan_type, Json(metadata or {})),
+                )
+    finally:
+        connection.close()
+
+
+def load_system_health_summary(hours: int = 24) -> dict:
+    """Return a summary of system health for the last `hours` hours."""
+    connection = get_connection()
+
+    try:
+        with connection:
+            with connection.cursor(cursor_factory=RealDictCursor) as cursor:
+                cursor.execute(
+                    """
+                    SELECT scan_type, COUNT(*) AS count,
+                           MAX(completed_at) AS last_run
+                    FROM system_health
+                    WHERE completed_at >= NOW() - INTERVAL '%s hours'
+                    GROUP BY scan_type
+                    """,
+                    (hours,),
+                )
+                rows = cursor.fetchall()
+
+                cursor.execute(
+                    """
+                    SELECT COUNT(*) AS total,
+                           SUM(CASE WHEN telegram_sent THEN 1 ELSE 0 END) AS sent
+                    FROM alert_history
+                    WHERE created_at >= NOW() - INTERVAL '%s hours'
+                    """,
+                    (hours,),
+                )
+                alert_row = cursor.fetchone()
+
+                cursor.execute(
+                    """
+                    SELECT COUNT(*) AS open_count
+                    FROM paper_trades WHERE status = 'open'
+                    """,
+                )
+                open_row = cursor.fetchone()
+
+                cursor.execute(
+                    """
+                    SELECT COALESCE(SUM(pnl_amount), 0) AS pnl_24h
+                    FROM paper_trades
+                    WHERE status = 'closed'
+                      AND closed_at >= NOW() - INTERVAL '%s hours'
+                    """,
+                    (hours,),
+                )
+                pnl_row = cursor.fetchone()
+    finally:
+        connection.close()
+
+    health_by_type = {row["scan_type"]: dict(row) for row in rows}
+    return {
+        "scans_completed": (health_by_type.get("scan") or {}).get("count", 0),
+        "last_scan": (health_by_type.get("scan") or {}).get("last_run"),
+        "alerts_total": int((alert_row or {}).get("total") or 0),
+        "alerts_sent": int((alert_row or {}).get("sent") or 0),
+        "open_paper_trades": int((open_row or {}).get("open_count") or 0),
+        "pnl_24h": float((pnl_row or {}).get("pnl_24h") or 0),
+        "hours": hours,
+    }
 
 
 def insert_telegram_send_log(

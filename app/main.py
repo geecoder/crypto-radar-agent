@@ -57,10 +57,12 @@ from app.storage.supabase_store import (
     insert_paper_trade_decision,
     load_paper_trade_decisions,
     load_scan_runs,
+    load_system_health_summary,
     load_unchecked_alert_history,
     persistence_health_check,
     update_alert_paper_trade_status,
     update_alert_telegram_status,
+    write_system_health,
 )
 from app.trading.paper_trading import (
     create_paper_trades_from_alerts,
@@ -168,6 +170,11 @@ def parse_args() -> argparse.Namespace:
         help="Print persistence backend health and recent stored records, then exit.",
     )
     parser.add_argument(
+        "--daily-digest",
+        action="store_true",
+        help="Send a daily health digest to Telegram (scans, alerts, P&L, missed runs).",
+    )
+    parser.add_argument(
         "--diagnose-symbol",
         default=None,
         help="Diagnose why one Binance symbol would or would not alert.",
@@ -199,6 +206,53 @@ def _count_hit(outcomes: list[dict], threshold: int) -> int:
 def _run_source() -> str:
     """Return the likely source for this scanner run."""
     return "github_actions" if os.getenv("GITHUB_ACTIONS") == "true" else "local"
+
+
+def _send_daily_digest() -> None:
+    """Build and send the daily health digest to Telegram."""
+    if not USE_SUPABASE:
+        print("Daily digest requires Supabase backend.")
+        return
+
+    try:
+        summary = load_system_health_summary(hours=24)
+    except Exception as exc:
+        print(f"Failed to load system health: {exc}")
+        return
+
+    scans = summary.get("scans_completed", 0)
+    alerts_total = summary.get("alerts_total", 0)
+    alerts_sent = summary.get("alerts_sent", 0)
+    send_rate = (
+        round(alerts_sent / alerts_total * 100, 1) if alerts_total else 0
+    )
+    open_trades = summary.get("open_paper_trades", 0)
+    pnl = summary.get("pnl_24h", 0)
+    last_scan = summary.get("last_scan")
+    missed_flag = ""
+
+    if last_scan:
+        try:
+            from datetime import datetime, timezone
+            last_dt = datetime.fromisoformat(str(last_scan).replace("Z", "+00:00"))
+            age_hours = (datetime.now(timezone.utc) - last_dt).total_seconds() / 3600
+            if age_hours > 3:
+                missed_flag = f"\n⚠️ MISSED RUN: last scan was {age_hours:.1f}h ago."
+        except Exception:
+            pass
+
+    pnl_sign = "+" if pnl >= 0 else ""
+    message = (
+        "📊 <b>Crypto Radar — Daily Digest</b>\n"
+        f"Scans completed (24h): <b>{scans}</b>\n"
+        f"Alerts sent/total: <b>{alerts_sent}/{alerts_total}</b> ({send_rate}%)\n"
+        f"Open paper trades: <b>{open_trades}</b>\n"
+        f"24h paper P&amp;L: <b>{pnl_sign}${pnl:.2f}</b>"
+        f"{missed_flag}"
+    )
+
+    sent, _ = send_telegram_message(message)
+    print("Daily digest sent." if sent else "Failed to send daily digest.")
 
 
 def _telegram_selftest() -> bool:
@@ -242,6 +296,11 @@ def _complete_scan_run(scan_run_id: str | None, summary: dict) -> None:
         return
 
     complete_scan_run(scan_run_id, summary)
+
+    try:
+        write_system_health("scan", {"scan_run_id": scan_run_id, **summary})
+    except Exception as exc:
+        print(f"Heartbeat write failed (non-fatal): {exc}")
 
 
 def _fail_scan_run(scan_run_id: str | None, error: Exception) -> None:
@@ -702,6 +761,10 @@ def main() -> None:
         else:
             print("Failed to send strategy performance report to Telegram.")
 
+        return
+
+    if args.daily_digest:
+        _send_daily_digest()
         return
 
     if args.diagnose_symbol:
