@@ -52,6 +52,7 @@ from app.storage.supabase_store import (
     create_scan_run,
     fail_scan_run,
     format_persistence_health_check,
+    insert_telegram_send_log,
     INVALID_SUPABASE_DATABASE_URL_MESSAGE,
     insert_paper_trade_decision,
     load_paper_trade_decisions,
@@ -200,6 +201,26 @@ def _run_source() -> str:
     return "github_actions" if os.getenv("GITHUB_ACTIONS") == "true" else "local"
 
 
+def _telegram_selftest() -> bool:
+    """Send a silent self-test ping to Telegram and return True only on HTTP 200.
+
+    Called once at scan startup when Telegram is enabled. Hard-fails the run
+    if the bot token or chat ID are broken so we never run blind.
+    """
+    print("Telegram self-test: sending startup ping…")
+    sent, attempts = send_telegram_message("🔔 Crypto Radar startup self-test OK.")
+    if sent:
+        print("Telegram self-test passed.")
+        return True
+
+    statuses = [
+        str(a.http_status) if a.http_status else "network error"
+        for a in attempts
+    ]
+    print(f"Telegram self-test FAILED. Attempt statuses: {', '.join(statuses) or 'none'}")
+    return False
+
+
 def _start_scan_run(args: argparse.Namespace, paper_strategy) -> str | None:
     """Create a Supabase scan run when Supabase persistence is enabled."""
     if not USE_SUPABASE:
@@ -231,13 +252,20 @@ def _fail_scan_run(scan_run_id: str | None, error: Exception) -> None:
     fail_scan_run(scan_run_id, str(error))
 
 
-def _telegram_error(telegram_sent: bool) -> str | None:
-    """Return a concise Telegram persistence error when delivery failed."""
+def _telegram_error(telegram_sent: bool, attempts: list) -> str | None:
+    """Return a concise Telegram error string for alert_history persistence."""
     if telegram_sent:
         return None
 
     if not settings.telegram_alerts_enabled:
         return "Telegram disabled"
+
+    # Surface the actual HTTP status from the last attempt if available.
+    if attempts:
+        last = attempts[-1]
+        status = last.http_status
+        if status is not None:
+            return f"HTTP {status}"
 
     return "Telegram send failed"
 
@@ -332,17 +360,27 @@ def _update_telegram_status_for_candidates(
     candidates: list[dict],
     telegram_sent: bool,
     error: str | None,
+    attempts: list | None = None,
 ) -> None:
     """Persist Telegram status for alert candidates when Supabase is enabled."""
     if not USE_SUPABASE:
         return
 
     for candidate in candidates:
-        update_alert_telegram_status(
-            candidate.get("alert_history_id"),
-            telegram_sent,
-            error,
-        )
+        alert_history_id = candidate.get("alert_history_id")
+        update_alert_telegram_status(alert_history_id, telegram_sent, error)
+
+        if attempts:
+            for attempt in attempts:
+                try:
+                    insert_telegram_send_log(
+                        alert_id=alert_history_id,
+                        attempt_number=attempt.attempt_number,
+                        http_status=attempt.http_status,
+                        response_body=attempt.response_body,
+                    )
+                except Exception as log_err:
+                    print(f"Failed to write telegram_send_log: {log_err}")
 
 
 def _run_normal_scan(args: argparse.Namespace, paper_strategy, scan_run_id: str | None) -> None:
@@ -400,7 +438,10 @@ def _run_normal_scan(args: argparse.Namespace, paper_strategy, scan_run_id: str 
             persisted_candidate = _persisted_alert_candidate(candidate, scan_run_id)
             symbol = persisted_candidate.get("symbol", "")
             score = _get_opportunity_score(persisted_candidate)
-            should_send, reason = should_send_alert(symbol, score)
+            current_price = persisted_candidate.get("latest_close")
+            should_send, reason = should_send_alert(
+                symbol, score, current_price=current_price
+            )
 
             if should_send:
                 candidates_to_send.append(persisted_candidate)
@@ -420,18 +461,25 @@ def _run_normal_scan(args: argparse.Namespace, paper_strategy, scan_run_id: str 
             _complete_scan_run(scan_run_id, scan_summary)
             return
 
-        telegram_sent = send_telegram_message(format_alert_message(candidates_to_send))
-        telegram_error = _telegram_error(telegram_sent)
+        telegram_sent, telegram_attempts = send_telegram_message(
+            format_alert_message(candidates_to_send)
+        )
+        telegram_error = _telegram_error(telegram_sent, telegram_attempts)
         _update_telegram_status_for_candidates(
             candidates_to_send,
             telegram_sent,
             telegram_error,
+            attempts=telegram_attempts,
         )
         scan_summary["total_telegram_sent"] = 1 if telegram_sent else 0
 
         for candidate in candidates_to_send:
             if telegram_sent:
-                record_alert(candidate["symbol"], _get_opportunity_score(candidate))
+                record_alert(
+                    candidate["symbol"],
+                    _get_opportunity_score(candidate),
+                    price=candidate.get("latest_close"),
+                )
 
         paper_decisions = create_paper_trades_from_alerts(
             candidates_to_send,
@@ -510,7 +558,8 @@ def main() -> None:
         return
 
     if args.test_telegram:
-        send_telegram_message(TELEGRAM_TEST_MESSAGE)
+        sent, _ = send_telegram_message(TELEGRAM_TEST_MESSAGE)
+        print("Telegram test message sent." if sent else "Telegram test message FAILED.")
         return
 
     if args.check_outcomes:
@@ -566,7 +615,7 @@ def main() -> None:
         outcomes = load_alert_outcomes()
         report = build_performance_report(outcomes)
         message = format_performance_report(report)
-        message_sent = send_telegram_message(message)
+        message_sent, _ = send_telegram_message(message)
 
         if message_sent:
             print("Performance report sent to Telegram.")
@@ -619,7 +668,7 @@ def main() -> None:
         alert_history = load_alert_history()
         report = build_telegram_delivery_report(alert_history)
         message = format_telegram_delivery_report(report)
-        message_sent = send_telegram_message(message)
+        message_sent, _ = send_telegram_message(message)
 
         if message_sent:
             print("Telegram delivery report sent to Telegram.")
@@ -646,7 +695,7 @@ def main() -> None:
         paper_trades = load_all_paper_trades()
         report = build_strategy_performance_report(paper_trades)
         message = format_strategy_performance_report(report)
-        message_sent = send_telegram_message(message)
+        message_sent, _ = send_telegram_message(message)
 
         if message_sent:
             print("Strategy performance report sent to Telegram.")
@@ -663,6 +712,13 @@ def main() -> None:
             alert_threshold=ALERT_THRESHOLD,
         )
         print(format_diagnostic_report(result, alert_threshold=ALERT_THRESHOLD))
+        return
+
+    if settings.telegram_alerts_enabled and not _telegram_selftest():
+        print(
+            "FATAL: Telegram self-test failed. "
+            "Fix bot token / chat ID before running. Aborting."
+        )
         return
 
     paper_strategy = get_strategy_by_name(args.paper_strategy)

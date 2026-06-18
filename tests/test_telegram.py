@@ -10,8 +10,16 @@ from app.alerts import telegram
 class FakeResponse:
     """Small fake response object for Telegram tests."""
 
+    def __init__(self, status_code: int = 200, text: str = '{"ok": true}') -> None:
+        self.status_code = status_code
+        self.text = text
+
     def raise_for_status(self) -> None:
         """Pretend the request succeeded."""
+
+    def json(self) -> dict:
+        import json
+        return json.loads(self.text)
 
 
 def test_send_telegram_message_returns_false_when_disabled(monkeypatch, capsys) -> None:
@@ -25,9 +33,10 @@ def test_send_telegram_message_returns_false_when_disabled(monkeypatch, capsys) 
         ),
     )
 
-    result = telegram.send_telegram_message("hello")
+    sent, attempts = telegram.send_telegram_message("hello")
 
-    assert result is False
+    assert sent is False
+    assert attempts == []
     assert "Telegram alerts disabled." in capsys.readouterr().out
 
 
@@ -45,9 +54,10 @@ def test_send_telegram_message_returns_false_when_credentials_missing(
         ),
     )
 
-    result = telegram.send_telegram_message("hello")
+    sent, attempts = telegram.send_telegram_message("hello")
 
-    assert result is False
+    assert sent is False
+    assert attempts == []
     assert "bot token or chat ID is missing" in capsys.readouterr().out
 
 
@@ -65,13 +75,16 @@ def test_send_telegram_message_posts_to_telegram(monkeypatch) -> None:
 
     def fake_post(url: str, data: dict, timeout: int) -> FakeResponse:
         requests_made.append({"url": url, "data": data, "timeout": timeout})
-        return FakeResponse()
+        return FakeResponse(status_code=200)
 
     monkeypatch.setattr(telegram.requests, "post", fake_post)
 
-    result = telegram.send_telegram_message("hello")
+    sent, attempts = telegram.send_telegram_message("hello")
 
-    assert result is True
+    assert sent is True
+    assert len(attempts) == 1
+    assert attempts[0].http_status == 200
+    assert attempts[0].success is True
     assert requests_made == [
         {
             "url": "https://api.telegram.org/bottoken/sendMessage",
@@ -104,7 +117,10 @@ def test_send_telegram_message_returns_false_on_request_error(
 
     monkeypatch.setattr(telegram.requests, "post", fake_post)
 
-    result = telegram.send_telegram_message("hello")
+    sent, attempts = telegram.send_telegram_message("hello")
 
-    assert result is False
-    assert "Failed to send Telegram message" in capsys.readouterr().out
+    assert sent is False
+    # All retry attempts recorded, all failed
+    assert len(attempts) > 0
+    assert all(not a.success for a in attempts)
+    assert "network failed" in capsys.readouterr().out

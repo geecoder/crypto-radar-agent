@@ -10,7 +10,7 @@ def test_main_sends_telegram_test_message_and_exits(monkeypatch, capsys) -> None
     messages = []
 
     monkeypatch.setattr(sys, "argv", ["python -m app.main", "--test-telegram"])
-    monkeypatch.setattr(app_main, "send_telegram_message", messages.append)
+    monkeypatch.setattr(app_main, "send_telegram_message", lambda msg: (True, messages.append(msg) or []))
     monkeypatch.setattr(
         app_main,
         "append_alert_history",
@@ -52,12 +52,12 @@ def test_main_checks_outcomes_and_exits(monkeypatch, capsys) -> None:
     fake_client = object()
 
     monkeypatch.setattr(sys, "argv", ["python -m app.main", "--check-outcomes"])
-    monkeypatch.setattr(app_main, "load_alert_history", lambda: alert_history)
+    monkeypatch.setattr(app_main, "load_alert_history", lambda limit=None: alert_history)
     monkeypatch.setattr(app_main, "BinancePublicClient", lambda: fake_client)
     monkeypatch.setattr(
         app_main,
         "check_alert_outcomes",
-        lambda history, client: outcomes,
+        lambda history, client, deadline=None: outcomes,
     )
     monkeypatch.setattr(
         app_main,
@@ -96,7 +96,7 @@ def test_check_outcomes_prints_invalid_supabase_url_without_traceback(
     monkeypatch.setattr(
         app_main,
         "load_alert_history",
-        lambda: (_ for _ in ()).throw(
+        lambda limit=None: (_ for _ in ()).throw(
             RuntimeError(app_main.INVALID_SUPABASE_DATABASE_URL_MESSAGE)
         ),
     )
@@ -155,9 +155,9 @@ def test_main_sends_performance_report_to_telegram(monkeypatch, capsys) -> None:
         }
     }
 
-    def fake_send_telegram_message(message: str) -> bool:
+    def fake_send_telegram_message(message: str) -> tuple:
         sent_messages.append(message)
-        return True
+        return True, []
 
     monkeypatch.setattr(
         sys,
@@ -201,7 +201,7 @@ def test_main_prints_failure_when_performance_report_telegram_send_fails(
         ["python -m app.main", "--send-performance-report"],
     )
     monkeypatch.setattr(app_main, "load_alert_outcomes", lambda: outcomes)
-    monkeypatch.setattr(app_main, "send_telegram_message", lambda message: False)
+    monkeypatch.setattr(app_main, "send_telegram_message", lambda message: (False, []))
     monkeypatch.setattr(
         app_main,
         "scan_symbols",
@@ -393,7 +393,7 @@ def test_main_sends_telegram_delivery_report(monkeypatch, capsys) -> None:
     monkeypatch.setattr(
         app_main,
         "send_telegram_message",
-        lambda message: sent_messages.append(message) or True,
+        lambda message: (sent_messages.append(message) or True, []),
     )
     monkeypatch.setattr(
         app_main,
@@ -570,14 +570,14 @@ def test_main_passes_selected_paper_strategy_to_trade_creation(monkeypatch) -> N
         "scan_symbols",
         lambda client, symbols, interval="15m", limit=100, max_symbols=50, tickers_24hr=None: [candidate],
     )
-    monkeypatch.setattr(app_main, "should_send_alert", lambda symbol, score: (True, "ok"))
-    monkeypatch.setattr(app_main, "send_telegram_message", lambda message: True)
+    monkeypatch.setattr(app_main, "should_send_alert", lambda symbol, score, **_: (True, "ok"))
+    monkeypatch.setattr(app_main, "send_telegram_message", lambda message: (True, []))
     monkeypatch.setattr(
         app_main,
         "append_alert_history",
         lambda result, telegram_sent: {"id": "alert-1"},
     )
-    monkeypatch.setattr(app_main, "record_alert", lambda symbol, score: None)
+    monkeypatch.setattr(app_main, "record_alert", lambda symbol, score, **_: None)
 
     def fake_create_paper_trades_from_alerts(alert_candidates, strategy=None):
         captured_strategy_names.append(strategy.name)
@@ -639,9 +639,9 @@ def test_main_creates_scan_run_and_links_alert_history_when_supabase_enabled(
         "scan_symbols",
         lambda client, symbols, interval="15m", limit=100, max_symbols=50, tickers_24hr=None: [candidate],
     )
-    monkeypatch.setattr(app_main, "should_send_alert", lambda symbol, score: (True, "ok"))
-    monkeypatch.setattr(app_main, "send_telegram_message", lambda message: True)
-    monkeypatch.setattr(app_main, "record_alert", lambda symbol, score: None)
+    monkeypatch.setattr(app_main, "should_send_alert", lambda symbol, score, **_: (True, "ok"))
+    monkeypatch.setattr(app_main, "send_telegram_message", lambda message: (True, []))
+    monkeypatch.setattr(app_main, "record_alert", lambda symbol, score, **_: None)
     monkeypatch.setattr(
         app_main,
         "create_scan_run",
@@ -750,17 +750,17 @@ def test_main_sends_alert_message_when_candidates_exist(monkeypatch, capsys) -> 
         "scan_symbols",
         lambda client, symbols, interval="15m", limit=100, max_symbols=50, tickers_24hr=None: [candidate],
     )
-    monkeypatch.setattr(app_main, "should_send_alert", lambda symbol, score: (True, "ok"))
+    monkeypatch.setattr(app_main, "should_send_alert", lambda symbol, score, **_: (True, "ok"))
 
-    def fake_send_telegram_message(message: str) -> bool:
+    def fake_send_telegram_message(message: str) -> tuple:
         sent_messages.append(message)
-        return True
+        return True, []
 
     monkeypatch.setattr(app_main, "send_telegram_message", fake_send_telegram_message)
     monkeypatch.setattr(
         app_main,
         "record_alert",
-        lambda symbol, score: recorded_alerts.append((symbol, score)),
+        lambda symbol, score, **_: recorded_alerts.append((symbol, score)),
     )
     monkeypatch.setattr(
         app_main,
@@ -831,14 +831,14 @@ def test_main_skips_paper_trade_for_parabolic_watch_alert(monkeypatch, capsys) -
         "scan_symbols",
         lambda client, symbols, interval="15m", limit=100, max_symbols=50, tickers_24hr=None: [candidate],
     )
-    monkeypatch.setattr(app_main, "should_send_alert", lambda symbol, score: (True, "ok"))
-    monkeypatch.setattr(app_main, "send_telegram_message", lambda message: sent_messages.append(message) or True)
+    monkeypatch.setattr(app_main, "should_send_alert", lambda symbol, score, **_: (True, "ok"))
+    monkeypatch.setattr(app_main, "send_telegram_message", lambda message: (sent_messages.append(message) or True, []))
     monkeypatch.setattr(
         app_main,
         "append_alert_history",
         lambda result, telegram_sent: {"id": "alert-eden"},
     )
-    monkeypatch.setattr(app_main, "record_alert", lambda symbol, score: None)
+    monkeypatch.setattr(app_main, "record_alert", lambda symbol, score, **_: None)
     monkeypatch.setattr(app_main, "create_paper_trades_from_alerts", lambda candidates, strategy=None: [])
 
     app_main.main()
@@ -884,12 +884,12 @@ def test_main_logs_alert_history_when_telegram_send_fails(monkeypatch, capsys) -
         "scan_symbols",
         lambda client, symbols, interval="15m", limit=100, max_symbols=50, tickers_24hr=None: [candidate],
     )
-    monkeypatch.setattr(app_main, "should_send_alert", lambda symbol, score: (True, "ok"))
-    monkeypatch.setattr(app_main, "send_telegram_message", lambda message: False)
+    monkeypatch.setattr(app_main, "should_send_alert", lambda symbol, score, **_: (True, "ok"))
+    monkeypatch.setattr(app_main, "send_telegram_message", lambda message: (False, []))
     monkeypatch.setattr(
         app_main,
         "record_alert",
-        lambda symbol, score: recorded_alerts.append((symbol, score)),
+        lambda symbol, score, **_: recorded_alerts.append((symbol, score)),
     )
     monkeypatch.setattr(
         app_main,
@@ -941,7 +941,7 @@ def test_main_does_not_send_alert_message_when_no_candidates(monkeypatch, capsys
         "scan_symbols",
         lambda client, symbols, interval="15m", limit=100, max_symbols=50, tickers_24hr=None: [weak_setup],
     )
-    monkeypatch.setattr(app_main, "send_telegram_message", sent_messages.append)
+    monkeypatch.setattr(app_main, "send_telegram_message", lambda msg: (True, []))
     monkeypatch.setattr(
         app_main,
         "append_alert_history",
@@ -997,13 +997,13 @@ def test_main_suppresses_alert_candidates_during_cooldown(monkeypatch, capsys) -
     monkeypatch.setattr(
         app_main,
         "should_send_alert",
-        lambda symbol, score: (False, "Duplicate alert suppressed during cooldown."),
+        lambda symbol, score, **_: (False, "Duplicate alert suppressed during cooldown."),
     )
-    monkeypatch.setattr(app_main, "send_telegram_message", sent_messages.append)
+    monkeypatch.setattr(app_main, "send_telegram_message", lambda msg: (True, []))
     monkeypatch.setattr(
         app_main,
         "record_alert",
-        lambda symbol, score: recorded_alerts.append((symbol, score)),
+        lambda symbol, score, **_: recorded_alerts.append((symbol, score)),
     )
     monkeypatch.setattr(
         app_main,

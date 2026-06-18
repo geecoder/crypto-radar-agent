@@ -419,6 +419,24 @@ def _ensure_tables(connection) -> None:
             ),
         ):
             cursor.execute(statement)
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS telegram_send_log (
+                id BIGSERIAL PRIMARY KEY,
+                alert_id TEXT,
+                attempt_number INTEGER NOT NULL,
+                http_status INTEGER,
+                response_body TEXT,
+                sent_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+            """
+        )
+        cursor.execute(
+            """
+            ALTER TABLE alert_state
+            ADD COLUMN IF NOT EXISTS last_price NUMERIC
+            """
+        )
 
     connection.commit()
 
@@ -536,7 +554,7 @@ def get_alert_state(symbol: str) -> dict | None:
             with connection.cursor(cursor_factory=RealDictCursor) as cursor:
                 cursor.execute(
                     """
-                    SELECT symbol, last_score, last_alerted_at
+                    SELECT symbol, last_score, last_alerted_at, last_price
                     FROM alert_state
                     WHERE symbol = %s
                     """,
@@ -554,7 +572,12 @@ def get_alert_state(symbol: str) -> dict | None:
     return state
 
 
-def upsert_alert_state(symbol: str, last_score: int, last_alerted_at: str) -> None:
+def upsert_alert_state(
+    symbol: str,
+    last_score: int,
+    last_alerted_at: str,
+    last_price: float | None = None,
+) -> None:
     """Insert or update one symbol's cooldown state in Supabase."""
     connection = get_connection()
 
@@ -563,15 +586,40 @@ def upsert_alert_state(symbol: str, last_score: int, last_alerted_at: str) -> No
             with connection.cursor() as cursor:
                 cursor.execute(
                     """
-                    INSERT INTO alert_state (symbol, last_score, last_alerted_at)
-                    VALUES (%s, %s, %s)
+                    INSERT INTO alert_state (symbol, last_score, last_alerted_at, last_price)
+                    VALUES (%s, %s, %s, %s)
                     ON CONFLICT (symbol) DO UPDATE
                     SET
                         last_score = EXCLUDED.last_score,
                         last_alerted_at = EXCLUDED.last_alerted_at,
+                        last_price = EXCLUDED.last_price,
                         updated_at = NOW()
                     """,
-                    (symbol, last_score, last_alerted_at),
+                    (symbol, last_score, last_alerted_at, last_price),
+                )
+    finally:
+        connection.close()
+
+
+def insert_telegram_send_log(
+    alert_id: str | None,
+    attempt_number: int,
+    http_status: int | None,
+    response_body: str | None,
+) -> None:
+    """Write one Telegram send attempt to the structured log table."""
+    connection = get_connection()
+
+    try:
+        with connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    INSERT INTO telegram_send_log
+                        (alert_id, attempt_number, http_status, response_body)
+                    VALUES (%s, %s, %s, %s)
+                    """,
+                    (alert_id, attempt_number, http_status, response_body),
                 )
     finally:
         connection.close()

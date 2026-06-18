@@ -8,6 +8,8 @@ from app.config import USE_SUPABASE
 from app.storage import supabase_store
 
 ALERT_STATE_FILE = "data/alert_state.json"
+# Price must have risen at least this much since last alert to bypass cooldown
+_MOMENTUM_BYPASS_PCT = 10.0
 
 
 def ensure_data_dir() -> None:
@@ -53,8 +55,15 @@ def should_send_alert(
     current_score: int,
     cooldown_minutes: int = 60,
     score_improvement_threshold: int = 10,
+    current_price: float | None = None,
 ) -> tuple[bool, str]:
-    """Return whether an alert should be sent for a symbol."""
+    """Return whether an alert should be sent for a symbol.
+
+    Cooldown is bypassed when:
+    - The cooldown period has passed.
+    - The score improved materially (≥ score_improvement_threshold points).
+    - The coin is already in active momentum: price rose ≥ 10% since last alert.
+    """
     if USE_SUPABASE:
         previous_alert = supabase_store.get_alert_state(symbol)
     else:
@@ -78,20 +87,43 @@ def should_send_alert(
     if current_score >= last_score + score_improvement_threshold:
         return True, "Score improved materially since last alert."
 
+    # Bypass cooldown for coins already in active momentum (price up ≥ 10%).
+    if current_price is not None:
+        last_price = _parse_last_price(previous_alert)
+        if last_price and last_price > 0:
+            price_change_pct = (current_price - last_price) / last_price * 100
+            if price_change_pct >= _MOMENTUM_BYPASS_PCT:
+                return (
+                    True,
+                    f"Active momentum: price up {price_change_pct:.1f}% since last alert.",
+                )
+
     return False, "Duplicate alert suppressed during cooldown."
 
 
-def record_alert(symbol: str, score: int) -> None:
+def record_alert(symbol: str, score: int, price: float | None = None) -> None:
     """Record that an alert was sent for a symbol."""
     last_alerted_at = datetime.now(timezone.utc).isoformat()
 
     if USE_SUPABASE:
-        supabase_store.upsert_alert_state(symbol, score, last_alerted_at)
+        supabase_store.upsert_alert_state(symbol, score, last_alerted_at, price)
         return
 
     state = load_alert_state()
     state[symbol] = {
         "last_alerted_at": last_alerted_at,
         "last_score": score,
+        "last_price": price,
     }
     save_alert_state(state)
+
+
+def _parse_last_price(previous_alert: dict) -> float | None:
+    """Extract the last-alerted price from a state record."""
+    raw = previous_alert.get("last_price")
+    if raw is None:
+        return None
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return None

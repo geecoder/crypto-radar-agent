@@ -128,7 +128,7 @@ def test_record_alert_writes_supabase_when_enabled(monkeypatch) -> None:
     monkeypatch.setattr(
         alert_state.supabase_store,
         "upsert_alert_state",
-        lambda symbol, last_score, last_alerted_at: saved_state.append(
+        lambda symbol, last_score, last_alerted_at, last_price=None: saved_state.append(
             (symbol, last_score, last_alerted_at)
         ),
     )
