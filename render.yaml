@@ -3,90 +3,66 @@ services:
   - type: cron
     name: crypto-radar-scan
     runtime: python
-    plan: free
     schedule: "0 */2 * * *"
     buildCommand: pip install -r requirements.txt
     startCommand: python -m app.main
     envVars:
-      - key: PERSISTENCE_BACKEND
-        value: supabase
-      - key: BINANCE_BASE_URL_ORDER
-        value: data-api,api1,api2,api3,api
-      - key: SUPABASE_DATABASE_URL
-        fromGroup: crypto-radar-secrets
-      - key: TELEGRAM_BOT_TOKEN
-        fromGroup: crypto-radar-secrets
-      - key: TELEGRAM_CHAT_ID
-        fromGroup: crypto-radar-secrets
-      - key: TELEGRAM_ALERTS_ENABLED
-        fromGroup: crypto-radar-secrets
+      - fromGroup: crypto-radar-secrets
 
   # Outcome checker — every 6 hours.
   - type: cron
     name: crypto-radar-outcomes
     runtime: python
-    plan: free
     schedule: "30 */6 * * *"
     buildCommand: pip install -r requirements.txt
     startCommand: python -m app.main --check-outcomes --limit 50 --max-minutes 8
     envVars:
-      - key: PERSISTENCE_BACKEND
-        value: supabase
-      - key: SUPABASE_DATABASE_URL
-        fromGroup: crypto-radar-secrets
+      - fromGroup: crypto-radar-secrets
 
   # Paper trade updater — every 2 hours, offset from scan.
   - type: cron
     name: crypto-radar-paper-trades
     runtime: python
-    plan: free
     schedule: "45 */2 * * *"
     buildCommand: pip install -r requirements.txt
     startCommand: python -m app.main --update-paper-trades
     envVars:
-      - key: PERSISTENCE_BACKEND
-        value: supabase
-      - key: BINANCE_BASE_URL_ORDER
-        value: data-api,api1,api2,api3,api
-      - key: SUPABASE_DATABASE_URL
-        fromGroup: crypto-radar-secrets
+      - fromGroup: crypto-radar-secrets
 
   # Weekly go-live readiness report — every Monday at 09:00 UTC.
   - type: cron
     name: crypto-radar-go-live-report
     runtime: python
-    plan: free
     schedule: "0 9 * * 1"
     buildCommand: pip install -r requirements.txt
     startCommand: python -m app.main --go-live-report
     envVars:
-      - key: PERSISTENCE_BACKEND
-        value: supabase
-      - key: SUPABASE_DATABASE_URL
-        fromGroup: crypto-radar-secrets
-      - key: TELEGRAM_BOT_TOKEN
-        fromGroup: crypto-radar-secrets
-      - key: TELEGRAM_CHAT_ID
-        fromGroup: crypto-radar-secrets
-      - key: TELEGRAM_ALERTS_ENABLED
-        fromGroup: crypto-radar-secrets
+      - fromGroup: crypto-radar-secrets
 
   # Daily digest — every day at 09:00 UTC.
   - type: cron
     name: crypto-radar-daily-digest
     runtime: python
-    plan: free
     schedule: "0 9 * * *"
     buildCommand: pip install -r requirements.txt
     startCommand: python -m app.main --daily-digest
     envVars:
+      - fromGroup: crypto-radar-secrets
+
+envVarGroups:
+  - name: crypto-radar-secrets
+    envVars:
+      # Non-secret values shared across all services.
       - key: PERSISTENCE_BACKEND
         value: supabase
+      - key: BINANCE_BASE_URL_ORDER
+        value: data-api,api1,api2,api3,api
+      # Secrets — set these manually in the Render dashboard after deploy.
       - key: SUPABASE_DATABASE_URL
-        fromGroup: crypto-radar-secrets
+        sync: false
       - key: TELEGRAM_BOT_TOKEN
-        fromGroup: crypto-radar-secrets
+        sync: false
       - key: TELEGRAM_CHAT_ID
-        fromGroup: crypto-radar-secrets
+        sync: false
       - key: TELEGRAM_ALERTS_ENABLED
-        fromGroup: crypto-radar-secrets
+        sync: false
