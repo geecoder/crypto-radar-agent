@@ -51,6 +51,26 @@ services:
       - key: SUPABASE_DATABASE_URL
         fromGroup: crypto-radar-secrets
 
+  # Weekly go-live readiness report — every Monday at 09:00 UTC.
+  - type: cron
+    name: crypto-radar-go-live-report
+    runtime: python
+    plan: free
+    schedule: "0 9 * * 1"
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m app.main --go-live-report
+    envVars:
+      - key: PERSISTENCE_BACKEND
+        value: supabase
+      - key: SUPABASE_DATABASE_URL
+        fromGroup: crypto-radar-secrets
+      - key: TELEGRAM_BOT_TOKEN
+        fromGroup: crypto-radar-secrets
+      - key: TELEGRAM_CHAT_ID
+        fromGroup: crypto-radar-secrets
+      - key: TELEGRAM_ALERTS_ENABLED
+        fromGroup: crypto-radar-secrets
+
   # Daily digest — every day at 09:00 UTC.
   - type: cron
     name: crypto-radar-daily-digest

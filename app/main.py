@@ -180,6 +180,11 @@ def parse_args() -> argparse.Namespace:
         help="Print PASS/FAIL for every live-trading precondition and exit.",
     )
     parser.add_argument(
+        "--go-live-report",
+        action="store_true",
+        help="Send the weekly go-live readiness report to Telegram and exit.",
+    )
+    parser.add_argument(
         "--diagnose-symbol",
         default=None,
         help="Diagnose why one Binance symbol would or would not alert.",
@@ -255,6 +260,101 @@ def _run_go_live_check() -> None:
         risk_manager_active=True,
     )
     print(format_go_live_report(gates))
+
+
+def _run_go_live_report() -> None:
+    """Compute metrics and send the weekly go-live readiness report to Telegram."""
+    from app.exchange.binance_executor import (
+        check_go_live_preconditions,
+        format_go_live_telegram_message,
+    )
+
+    # Block 3 was deployed 2026-06-18 — only trades closed after this date
+    # use the new trailing-stop / partial-TP / wider-SL logic.
+    BLOCK3_DATE = "2026-06-18"
+
+    paper_trades = load_all_paper_trades()
+    closed = [t for t in paper_trades if t.get("status") == "closed"]
+
+    # Win rate over last 100 closed trades.
+    last_100 = closed[-100:] if len(closed) >= 100 else closed
+    wins_100 = sum(1 for t in last_100 if (t.get("pnl_pct") or 0) > 0)
+    win_rate_100 = (wins_100 / len(last_100) * 100) if last_100 else 0.0
+    avg_pnl_100 = (
+        sum(float(t.get("pnl_pct") or 0) for t in last_100) / len(last_100)
+        if last_100 else 0.0
+    )
+
+    # Win rate this week vs last week.
+    now = datetime.now(timezone.utc)
+    week_cutoff = (now - timedelta(days=7)).isoformat()
+    two_weeks_cutoff = (now - timedelta(days=14)).isoformat()
+
+    this_week = [
+        t for t in closed
+        if str(t.get("closed_at") or "") >= week_cutoff
+    ]
+    last_week_trades = [
+        t for t in closed
+        if two_weeks_cutoff <= str(t.get("closed_at") or "") < week_cutoff
+    ]
+
+    def _wr(trades: list[dict]) -> float:
+        if not trades:
+            return 0.0
+        return sum(1 for t in trades if (t.get("pnl_pct") or 0) > 0) / len(trades) * 100
+
+    win_rate_this_week = _wr(this_week)
+    win_rate_last_week = _wr(last_week_trades)
+
+    # Post-Block 3 closed trade count.
+    post_block3 = [
+        t for t in closed
+        if str(t.get("closed_at") or t.get("opened_at") or "") >= BLOCK3_DATE
+    ]
+
+    # Exit reason breakdown for this week.
+    breakdown: dict[str, int] = {"stop_loss": 0, "take_profit": 0, "max_hold_expired": 0}
+    for t in this_week:
+        reason = str(t.get("exit_reason") or "")
+        if reason == "stop_loss":
+            breakdown["stop_loss"] += 1
+        elif reason.startswith("take_profit"):
+            breakdown["take_profit"] += 1
+        elif reason == "max_hold_expired":
+            breakdown["max_hold_expired"] += 1
+
+    # Telegram send rate (7d).
+    alert_history = load_alert_history(limit=None)
+    recent_alerts = [
+        a for a in alert_history
+        if str(a.get("created_at") or "") >= week_cutoff
+    ]
+    total_recent = len(recent_alerts)
+    sent_recent = sum(1 for a in recent_alerts if a.get("telegram_sent"))
+    tg_rate = (sent_recent / total_recent * 100) if total_recent else 0.0
+
+    gates = check_go_live_preconditions(
+        closed_paper_trade_count=len(closed),
+        win_rate_last_100=win_rate_100,
+        avg_pnl_last_100=avg_pnl_100,
+        telegram_send_rate_7d=tg_rate,
+        risk_manager_active=True,
+    )
+
+    message = format_go_live_telegram_message(
+        gates=gates,
+        win_rate_last_100=win_rate_100,
+        win_rate_this_week=win_rate_this_week,
+        win_rate_last_week=win_rate_last_week,
+        post_block3_closed=len(post_block3),
+        exit_breakdown_this_week=breakdown,
+        total_closed=len(closed),
+    )
+
+    print(message)
+    sent, _ = send_telegram_message(message)
+    print("Go-live report sent." if sent else "Failed to send go-live report.")
 
 
 def _send_daily_digest() -> None:
@@ -818,6 +918,10 @@ def main() -> None:
 
     if args.go_live_check:
         _run_go_live_check()
+        return
+
+    if args.go_live_report:
+        _run_go_live_report()
         return
 
     if args.diagnose_symbol:

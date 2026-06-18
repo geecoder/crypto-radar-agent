@@ -110,7 +110,7 @@ def all_go_live_gates_pass(gates: list[GoLiveGate]) -> bool:
 
 
 def format_go_live_report(gates: list[GoLiveGate]) -> str:
-    """Format a human-readable go-live readiness table."""
+    """Format a human-readable console go-live readiness table."""
     lines = ["Go-Live Readiness Check", "=" * 40]
     for gate in gates:
         status = "✅ PASS" if gate.passed else "❌ FAIL"
@@ -118,6 +118,109 @@ def format_go_live_report(gates: list[GoLiveGate]) -> str:
     overall = "READY" if all_go_live_gates_pass(gates) else "NOT READY"
     lines.append("=" * 40)
     lines.append(f"Overall: {overall}")
+    return "\n".join(lines)
+
+
+def _verdict(
+    gates: list[GoLiveGate],
+    win_rate_this_week: float,
+    win_rate_last_week: float,
+) -> str:
+    """Return a one-line human verdict for the Telegram report."""
+    if all_go_live_gates_pass(gates):
+        return "🚀 All gates PASS — ready to go live."
+
+    trend = win_rate_this_week - win_rate_last_week
+    win_gate = next((g for g in gates if g.name == "min_win_rate"), None)
+    win_rate_passed = win_gate.passed if win_gate else False
+
+    if win_rate_passed:
+        failing = [g.name for g in gates if not g.passed]
+        return f"Win rate target met — fix: {', '.join(failing)}."
+
+    if win_rate_this_week >= 50 and trend >= 2:
+        return "On track for August — win rate climbing toward 55%."
+
+    if trend <= -2:
+        return "⚠️ Win rate declining — review recent entries."
+
+    if win_rate_this_week < 40:
+        return "⚠️ Win rate stalled — review entry criteria."
+
+    return "Making progress — keep running paper trades."
+
+
+def format_go_live_telegram_message(
+    gates: list[GoLiveGate],
+    win_rate_last_100: float,
+    win_rate_this_week: float,
+    win_rate_last_week: float,
+    post_block3_closed: int,
+    exit_breakdown_this_week: dict[str, int],
+    total_closed: int,
+) -> str:
+    """Format the weekly go-live readiness report as Telegram HTML.
+
+    Args:
+        gates: output of check_go_live_preconditions().
+        win_rate_last_100: overall win % for last 100 closed trades.
+        win_rate_this_week: win % for trades closed in the last 7 days.
+        win_rate_last_week: win % for trades closed 7–14 days ago.
+        post_block3_closed: closed trades opened after Block 3 deploy (2026-06-18).
+        exit_breakdown_this_week: dict with keys stop_loss, take_profit, max_hold_expired.
+        total_closed: total closed paper trades all time.
+    """
+    gate_icon = {True: "✅", False: "❌"}
+    gate_labels = {
+        "min_paper_trades": "≥100 closed trades",
+        "min_win_rate": "≥55% win rate",
+        "positive_avg_pnl": "Positive avg P&amp;L",
+        "telegram_send_rate": "Telegram ≥90%",
+        "risk_manager_active": "Risk manager active",
+    }
+
+    trend_delta = win_rate_this_week - win_rate_last_week
+    trend_str = (
+        f"+{trend_delta:.1f}%" if trend_delta >= 0 else f"{trend_delta:.1f}%"
+    )
+    trend_icon = "📈" if trend_delta >= 0 else "📉"
+
+    total_this_week = sum(exit_breakdown_this_week.values())
+
+    def pct(n: int) -> str:
+        return f"{n/total_this_week*100:.0f}%" if total_this_week else "—"
+
+    sl = exit_breakdown_this_week.get("stop_loss", 0)
+    tp = exit_breakdown_this_week.get("take_profit", 0)
+    mh = exit_breakdown_this_week.get("max_hold_expired", 0)
+
+    lines = [
+        "📊 <b>Weekly Go-Live Readiness Report</b>",
+        "",
+        "<b>Gates:</b>",
+    ]
+    for gate in gates:
+        icon = gate_icon[gate.passed]
+        label = gate_labels.get(gate.name, gate.name)
+        lines.append(f"  {icon} {label}")
+
+    lines += [
+        "",
+        "<b>Win rate:</b>",
+        f"  Last 100 trades: <b>{win_rate_last_100:.1f}%</b> (target 55%)",
+        f"  This week:  <b>{win_rate_this_week:.1f}%</b>",
+        f"  Last week:  <b>{win_rate_last_week:.1f}%</b>  {trend_icon} {trend_str}",
+        "",
+        "<b>Post-Block 3 trades (new logic):</b>",
+        f"  Closed: <b>{post_block3_closed}</b> / 100 needed",
+        "",
+        f"<b>Exit reasons this week</b> ({total_this_week} trades):",
+        f"  Stop-loss:        {sl:2d}  ({pct(sl)})",
+        f"  Take-profit:      {tp:2d}  ({pct(tp)})",
+        f"  Max-hold expired: {mh:2d}  ({pct(mh)})",
+        "",
+        f"<b>Verdict:</b> {_verdict(gates, win_rate_this_week, win_rate_last_week)}",
+    ]
     return "\n".join(lines)
 
 
