@@ -175,6 +175,11 @@ def parse_args() -> argparse.Namespace:
         help="Send a daily health digest to Telegram (scans, alerts, P&L, missed runs).",
     )
     parser.add_argument(
+        "--go-live-check",
+        action="store_true",
+        help="Print PASS/FAIL for every live-trading precondition and exit.",
+    )
+    parser.add_argument(
         "--diagnose-symbol",
         default=None,
         help="Diagnose why one Binance symbol would or would not alert.",
@@ -206,6 +211,50 @@ def _count_hit(outcomes: list[dict], threshold: int) -> int:
 def _run_source() -> str:
     """Return the likely source for this scanner run."""
     return "github_actions" if os.getenv("GITHUB_ACTIONS") == "true" else "local"
+
+
+def _run_go_live_check() -> None:
+    """Query the DB and print PASS/FAIL for all go-live preconditions."""
+    from app.exchange.binance_executor import (
+        check_go_live_preconditions,
+        format_go_live_report,
+    )
+
+    if not USE_SUPABASE:
+        print("Go-live check requires Supabase backend.")
+        return
+
+    print("Evaluating go-live preconditions…")
+    paper_trades = load_all_paper_trades()
+    closed = [t for t in paper_trades if t.get("status") == "closed"]
+    last_100 = closed[-100:] if len(closed) >= 100 else closed
+
+    wins = sum(1 for t in last_100 if (t.get("pnl_pct") or 0) > 0)
+    win_rate = (wins / len(last_100) * 100) if last_100 else 0.0
+    avg_pnl = (
+        sum(float(t.get("pnl_pct") or 0) for t in last_100) / len(last_100)
+        if last_100
+        else 0.0
+    )
+
+    alert_history = load_alert_history(limit=None)
+    from datetime import timedelta
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+    recent_alerts = [
+        a for a in alert_history if str(a.get("created_at") or "") >= cutoff
+    ]
+    total_recent = len(recent_alerts)
+    sent_recent = sum(1 for a in recent_alerts if a.get("telegram_sent"))
+    tg_rate = (sent_recent / total_recent * 100) if total_recent else 0.0
+
+    gates = check_go_live_preconditions(
+        closed_paper_trade_count=len(closed),
+        win_rate_last_100=win_rate,
+        avg_pnl_last_100=avg_pnl,
+        telegram_send_rate_7d=tg_rate,
+        risk_manager_active=True,
+    )
+    print(format_go_live_report(gates))
 
 
 def _send_daily_digest() -> None:
@@ -765,6 +814,10 @@ def main() -> None:
 
     if args.daily_digest:
         _send_daily_digest()
+        return
+
+    if args.go_live_check:
+        _run_go_live_check()
         return
 
     if args.diagnose_symbol:

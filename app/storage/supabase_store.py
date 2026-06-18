@@ -457,6 +457,19 @@ def _ensure_tables(connection) -> None:
             )
             """
         )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS shadow_trades (
+                id BIGSERIAL PRIMARY KEY,
+                action TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                quantity NUMERIC,
+                price NUMERIC,
+                logged_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                metadata JSONB
+            )
+            """
+        )
 
     connection.commit()
 
@@ -616,6 +629,32 @@ def upsert_alert_state(
                         updated_at = NOW()
                     """,
                     (symbol, last_score, last_alerted_at, last_price),
+                )
+    finally:
+        connection.close()
+
+
+def insert_shadow_trade(record: dict) -> None:
+    """Persist a shadow (would-be live) order to shadow_trades."""
+    connection = get_connection()
+
+    try:
+        with connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    INSERT INTO shadow_trades
+                        (action, symbol, quantity, price, logged_at, metadata)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        record.get("action"),
+                        record.get("symbol"),
+                        record.get("quantity"),
+                        record.get("price"),
+                        record.get("logged_at"),
+                        Json(record.get("metadata") or {}),
+                    ),
                 )
     finally:
         connection.close()
