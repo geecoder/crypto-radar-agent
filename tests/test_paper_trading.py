@@ -135,12 +135,13 @@ def test_build_paper_trade_from_alert() -> None:
     assert trade["move_from_recent_low_pct"] == 8.5
     assert trade["liquidity_label"] == "Strong"
     assert trade["exhaustion_risk_level"] == "Medium"
-    assert trade["stop_loss_pct"] == -5
+    assert trade["stop_loss_pct"] == -10
     assert trade["take_profit_1_pct"] == 8
     assert trade["take_profit_2_pct"] == 15
     assert trade["take_profit_3_pct"] == 20
+    # score=72 >= high_score_threshold=60 → gets extended 48h hold
     assert trade["max_hold_hours"] == 48
-    assert trade["simulated_position_size"] == 100
+    assert trade["simulated_position_size"] == 50
 
 
 def test_build_paper_trade_uses_trade_plan_risk_targets() -> None:
@@ -313,8 +314,12 @@ def test_evaluate_open_paper_trade_take_profit() -> None:
     assert updates["status"] == "closed"
     assert updates["exit_reason"] == "take_profit_3"
     assert updates["exit_price"] == 120.0
-    assert updates["pnl_pct"] == 20.0
-    assert updates["pnl_amount"] == 20.0
+    # Blended P&L: 50% × 8% (TP1) + 30% × 15% (TP2) + 20% × 20% (TP3) = 12.5%
+    assert updates["pnl_pct"] == 12.5
+    assert updates["pnl_amount"] == 12.5   # position_size=100 × 12.5%
+    assert updates["partial_tp1_hit"] is True
+    assert updates["partial_tp2_hit"] is True
+    assert updates["blended_pnl_pct"] == 12.5
 
 
 def test_evaluate_open_paper_trade_max_hold_expiry() -> None:

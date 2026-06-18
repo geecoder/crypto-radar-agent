@@ -1,6 +1,6 @@
 """Configurable paper trading strategy presets."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass(frozen=True)
@@ -19,6 +19,18 @@ class PaperTradingStrategy:
     take_profit_3_pct: float
     max_hold_hours: int
     simulated_position_size: float
+    # Extended hold for high-scoring trades (score >= high_score_threshold).
+    high_score_threshold: int = 60
+    high_score_max_hold_hours: int = 48
+    # Trailing stop: move stop to breakeven once up breakeven_trigger_pct,
+    # then trail at trail_pct below the running peak once up activate_trigger_pct.
+    trailing_stop_breakeven_pct: float = 10.0
+    trailing_stop_activate_pct: float = 25.0
+    trailing_stop_trail_pct: float = 15.0
+    # Partial take-profits: fractions of position closed at TP1 and TP2;
+    # the remainder rides until TP3, trailing stop, or max-hold expiry.
+    partial_tp1_fraction: float = 0.5
+    partial_tp2_fraction: float = 0.3
 
 
 def get_default_paper_trading_strategy() -> PaperTradingStrategy:
@@ -30,12 +42,15 @@ def get_default_paper_trading_strategy() -> PaperTradingStrategy:
         max_move_from_recent_low_pct=20,
         allow_thin_liquidity=True,
         allow_high_exhaustion=False,
-        stop_loss_pct=-5,
+        # Widened from -5% to -10% — crypto routinely wicks through -7%.
+        # Position halved from 100 → 50 so dollar-risk-per-trade stays constant.
+        stop_loss_pct=-10,
         take_profit_1_pct=8,
         take_profit_2_pct=15,
         take_profit_3_pct=20,
-        max_hold_hours=48,
-        simulated_position_size=100,
+        max_hold_hours=24,
+        high_score_max_hold_hours=48,
+        simulated_position_size=50,
     )
 
 
@@ -66,12 +81,12 @@ def get_aggressive_paper_trading_strategy() -> PaperTradingStrategy:
         max_move_from_recent_low_pct=30,
         allow_thin_liquidity=False,
         allow_high_exhaustion=False,
-        stop_loss_pct=-7,
+        stop_loss_pct=-10,
         take_profit_1_pct=10,
         take_profit_2_pct=20,
         take_profit_3_pct=35,
         max_hold_hours=48,
-        simulated_position_size=100,
+        simulated_position_size=70,
     )
 
 
@@ -102,7 +117,7 @@ def get_speculative_early_runner_strategy() -> PaperTradingStrategy:
         max_move_from_recent_low_pct=20,
         allow_thin_liquidity=True,
         allow_high_exhaustion=False,
-        stop_loss_pct=-7,
+        stop_loss_pct=-10,
         take_profit_1_pct=10,
         take_profit_2_pct=20,
         take_profit_3_pct=35,

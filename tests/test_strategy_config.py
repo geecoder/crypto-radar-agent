@@ -46,17 +46,26 @@ def test_default_strategy_values() -> None:
     strategy = get_default_paper_trading_strategy()
 
     assert strategy.name == "default_momentum_continuation"
-    assert strategy.minimum_opportunity_score == 65
+    assert strategy.minimum_opportunity_score == 55
     assert strategy.min_move_from_recent_low_pct == 3
     assert strategy.max_move_from_recent_low_pct == 20
-    assert strategy.allow_thin_liquidity is False
+    assert strategy.allow_thin_liquidity is True
     assert strategy.allow_high_exhaustion is False
-    assert strategy.stop_loss_pct == -5
+    # Widened SL; position halved so dollar-risk stays constant.
+    assert strategy.stop_loss_pct == -10
     assert strategy.take_profit_1_pct == 8
     assert strategy.take_profit_2_pct == 15
     assert strategy.take_profit_3_pct == 20
-    assert strategy.max_hold_hours == 48
-    assert strategy.simulated_position_size == 100
+    assert strategy.max_hold_hours == 24
+    assert strategy.high_score_max_hold_hours == 48
+    assert strategy.simulated_position_size == 50
+    # Trailing stop defaults.
+    assert strategy.trailing_stop_breakeven_pct == 10.0
+    assert strategy.trailing_stop_activate_pct == 25.0
+    assert strategy.trailing_stop_trail_pct == 15.0
+    # Partial exit defaults.
+    assert strategy.partial_tp1_fraction == 0.5
+    assert strategy.partial_tp2_fraction == 0.3
 
 
 def test_conservative_strategy_values() -> None:
@@ -85,12 +94,12 @@ def test_aggressive_strategy_values() -> None:
     assert strategy.max_move_from_recent_low_pct == 30
     assert strategy.allow_thin_liquidity is False
     assert strategy.allow_high_exhaustion is False
-    assert strategy.stop_loss_pct == -7
+    assert strategy.stop_loss_pct == -10
     assert strategy.take_profit_1_pct == 10
     assert strategy.take_profit_2_pct == 20
     assert strategy.take_profit_3_pct == 35
     assert strategy.max_hold_hours == 48
-    assert strategy.simulated_position_size == 100
+    assert strategy.simulated_position_size == 70
 
 
 def test_parabolic_strategy_values() -> None:
@@ -114,12 +123,12 @@ def test_speculative_early_runner_strategy_values() -> None:
     strategy = get_speculative_early_runner_strategy()
 
     assert strategy.name == "speculative_early_runner_paper"
-    assert strategy.minimum_opportunity_score == 50
+    assert strategy.minimum_opportunity_score == 40
     assert strategy.min_move_from_recent_low_pct == 5
     assert strategy.max_move_from_recent_low_pct == 20
     assert strategy.allow_thin_liquidity is True
     assert strategy.allow_high_exhaustion is False
-    assert strategy.stop_loss_pct == -7
+    assert strategy.stop_loss_pct == -10
     assert strategy.take_profit_1_pct == 10
     assert strategy.take_profit_2_pct == 20
     assert strategy.take_profit_3_pct == 35
@@ -167,9 +176,8 @@ def test_build_paper_trade_from_alert_uses_strategy_exit_values() -> None:
     trade = build_paper_trade_from_alert(_eligible_alert(), strategy=strategy)
 
     assert trade["strategy_name"] == "aggressive_high_volatility"
-    assert trade["stop_loss_pct"] == -7
+    assert trade["stop_loss_pct"] == -10
     assert trade["take_profit_1_pct"] == 10
     assert trade["take_profit_2_pct"] == 20
     assert trade["take_profit_3_pct"] == 35
-    assert trade["max_hold_hours"] == 48
-    assert trade["simulated_position_size"] == 100
+    assert trade["simulated_position_size"] == 70

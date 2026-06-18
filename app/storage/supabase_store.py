@@ -280,6 +280,16 @@ def _ensure_tables(connection) -> None:
             ADD COLUMN IF NOT EXISTS source_alert_id TEXT
             """
         )
+        for statement in (
+            'ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS peak_price NUMERIC',
+            'ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS trailing_stop_price NUMERIC',
+            'ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS partial_tp1_hit BOOLEAN NOT NULL DEFAULT FALSE',
+            'ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS partial_tp2_hit BOOLEAN NOT NULL DEFAULT FALSE',
+            'ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS partial_tp1_price NUMERIC',
+            'ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS partial_tp2_price NUMERIC',
+            'ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS blended_pnl_pct NUMERIC',
+        ):
+            cursor.execute(statement)
         cursor.execute(
             """
             CREATE TABLE IF NOT EXISTS paper_trade_events (
@@ -1642,6 +1652,13 @@ def update_paper_trade(trade_id: str, updates: dict) -> None:
         "exit_reason": "exit_reason",
         "pnl_pct": "pnl_pct",
         "pnl_amount": "pnl_amount",
+        "peak_price": "peak_price",
+        "trailing_stop_price": "trailing_stop_price",
+        "partial_tp1_hit": "partial_tp1_hit",
+        "partial_tp2_hit": "partial_tp2_hit",
+        "partial_tp1_price": "partial_tp1_price",
+        "partial_tp2_price": "partial_tp2_price",
+        "blended_pnl_pct": "blended_pnl_pct",
     }
     set_clauses = []
     values = []

@@ -108,9 +108,18 @@ def build_paper_trade_from_alert(
         "max_hold_hours": _trade_plan_value(
             trade_plan,
             "max_hold_hours",
-            strategy.max_hold_hours,
+            _score_based_max_hold_hours(
+                _get_opportunity_value(result, "opportunity_score"), strategy
+            ),
         ),
         "simulated_position_size": strategy.simulated_position_size,
+        "peak_price": result.get("latest_close"),
+        "trailing_stop_price": None,
+        "partial_tp1_hit": False,
+        "partial_tp2_hit": False,
+        "partial_tp1_price": None,
+        "partial_tp2_price": None,
+        "blended_pnl_pct": None,
     }
 
 
@@ -445,7 +454,11 @@ def _update_alert_paper_trade_status(decision: dict) -> None:
 
 
 def evaluate_open_paper_trade(trade: dict, candles_df) -> dict:
-    """Evaluate one open paper trade against market candles."""
+    """Evaluate one open paper trade against market candles.
+
+    Returns a dict with exit fields when the trade closes, or a tracking-state
+    dict (peak_price, trailing_stop_price, partial TP flags) when still open.
+    """
     entry_price = _safe_float(trade.get("entry_price"), default=None)
 
     if entry_price is None or entry_price <= 0:
@@ -461,12 +474,32 @@ def evaluate_open_paper_trade(trade: dict, candles_df) -> dict:
     if post_open_candles.empty:
         return {"status": "open"}
 
-    stop_loss_price = _price_at_pct(entry_price, trade.get("stop_loss_pct", -5))
+    initial_stop_pct = trade.get("stop_loss_pct", -10)
+    initial_stop_price = _price_at_pct(entry_price, initial_stop_pct)
     take_profit_1_price = _price_at_pct(entry_price, trade.get("take_profit_1_pct", 8))
     take_profit_2_price = _price_at_pct(entry_price, trade.get("take_profit_2_pct", 15))
     take_profit_3_price = _price_at_pct(entry_price, trade.get("take_profit_3_pct", 20))
     max_hold_hours = _safe_float(trade.get("max_hold_hours"), default=48) or 48
     expires_at = opened_at + timedelta(hours=max_hold_hours)
+
+    # Trailing stop configuration (defaults match strategy_config defaults).
+    breakeven_trigger_pct = 10.0
+    activate_trigger_pct = 25.0
+    trail_pct = 15.0
+
+    # Partial-exit state (persisted between scan runs via trade dict).
+    partial_tp1_hit = bool(trade.get("partial_tp1_hit", False))
+    partial_tp1_price = _safe_float(trade.get("partial_tp1_price"), default=None)
+    partial_tp2_hit = bool(trade.get("partial_tp2_hit", False))
+    partial_tp2_price = _safe_float(trade.get("partial_tp2_price"), default=None)
+
+    # Running state — seed from persisted values so we don't reset each scan.
+    peak_price = _safe_float(trade.get("peak_price"), default=entry_price) or entry_price
+    current_stop = _safe_float(trade.get("trailing_stop_price"), default=None)
+    if current_stop is None or current_stop <= 0:
+        current_stop = initial_stop_price
+
+    tracking_changed = False
 
     for _index, candle in post_open_candles.iterrows():
         candle_time = _row_timestamp(candle)
@@ -477,38 +510,70 @@ def evaluate_open_paper_trade(trade: dict, candles_df) -> dict:
         low = _safe_float(candle.get("low"), default=None)
         high = _safe_float(candle.get("high"), default=None)
 
-        if low is not None and low <= stop_loss_price:
-            return _build_close_updates(
-                trade,
-                stop_loss_price,
-                "stop_loss",
-                candle_time,
-            )
-
+        # Check TP3 first (optimistic candle ordering: assume high before low).
+        # Also register lower partial TPs that would have been crossed en route.
         if high is not None and high >= take_profit_3_price:
-            return _build_close_updates(
-                trade,
-                take_profit_3_price,
-                "take_profit_3",
-                candle_time,
+            new_peak = max(peak_price, high)
+            if not partial_tp1_hit and high >= take_profit_1_price:
+                partial_tp1_hit = True
+                partial_tp1_price = take_profit_1_price
+            if partial_tp1_hit and not partial_tp2_hit and high >= take_profit_2_price:
+                partial_tp2_hit = True
+                partial_tp2_price = take_profit_2_price
+            return _build_blended_close(
+                trade, take_profit_3_price, "take_profit_3", candle_time,
+                partial_tp1_hit, partial_tp1_price,
+                partial_tp2_hit, partial_tp2_price,
+                new_peak, current_stop,
             )
 
-        if high is not None and high >= take_profit_2_price:
-            return _build_close_updates(
-                trade,
-                take_profit_2_price,
-                "take_profit_2",
-                candle_time,
+        # Update running peak.
+        if high is not None and high > peak_price:
+            peak_price = high
+            tracking_changed = True
+
+        # Update trailing stop based on new peak.
+        gain_pct = (peak_price - entry_price) / entry_price * 100
+
+        if gain_pct >= activate_trigger_pct:
+            # Trail stop at trail_pct% below running peak.
+            new_stop = peak_price * (1 - trail_pct / 100)
+            if new_stop > current_stop:
+                current_stop = new_stop
+                tracking_changed = True
+        elif gain_pct >= breakeven_trigger_pct:
+            # Move stop up to breakeven (entry price).
+            if entry_price > current_stop:
+                current_stop = entry_price
+                tracking_changed = True
+
+        # Check stop-loss (initial or trailing) after TP3 has been checked.
+        if low is not None and low <= current_stop:
+            return _build_blended_close(
+                trade, current_stop, "stop_loss", candle_time,
+                partial_tp1_hit, partial_tp1_price,
+                partial_tp2_hit, partial_tp2_price,
+                peak_price, current_stop,
             )
 
-        if high is not None and high >= take_profit_1_price:
-            return _build_close_updates(
-                trade,
-                take_profit_1_price,
-                "take_profit_1",
-                candle_time,
-            )
+        # Register partial TP1 (does not close trade).
+        if not partial_tp1_hit and high is not None and high >= take_profit_1_price:
+            partial_tp1_hit = True
+            partial_tp1_price = take_profit_1_price
+            tracking_changed = True
 
+        # Register partial TP2 (requires TP1 to have been hit; does not close).
+        if (
+            partial_tp1_hit
+            and not partial_tp2_hit
+            and high is not None
+            and high >= take_profit_2_price
+        ):
+            partial_tp2_hit = True
+            partial_tp2_price = take_profit_2_price
+            tracking_changed = True
+
+    # Max hold expiry check.
     latest_candle = post_open_candles.iloc[-1]
     latest_time = _row_timestamp(latest_candle)
 
@@ -518,12 +583,24 @@ def evaluate_open_paper_trade(trade: dict, candles_df) -> dict:
         if latest_close is None:
             return {"status": "open"}
 
-        return _build_close_updates(
-            trade,
-            latest_close,
-            "max_hold_expired",
-            latest_time,
+        return _build_blended_close(
+            trade, latest_close, "max_hold_expired", latest_time,
+            partial_tp1_hit, partial_tp1_price,
+            partial_tp2_hit, partial_tp2_price,
+            peak_price, current_stop,
         )
+
+    # Still open — persist tracking state if it changed.
+    if tracking_changed:
+        return {
+            "status": "open",
+            "peak_price": round(peak_price, 8),
+            "trailing_stop_price": round(current_stop, 8),
+            "partial_tp1_hit": partial_tp1_hit,
+            "partial_tp2_hit": partial_tp2_hit,
+            "partial_tp1_price": round(partial_tp1_price, 8) if partial_tp1_price else None,
+            "partial_tp2_price": round(partial_tp2_price, 8) if partial_tp2_price else None,
+        }
 
     return {"status": "open"}
 
@@ -576,6 +653,10 @@ def update_open_paper_trades(client) -> dict:
                 closed_take_profit += 1
             elif exit_reason == "stop_loss":
                 closed_stop_loss += 1
+        elif len(updates) > 1:
+            # Intermediate tracking state update (peak price, partial TPs, trailing stop).
+            _update_paper_trade(str(trade.get("id")), updates)
+            still_open += 1
         else:
             still_open += 1
 
@@ -703,16 +784,69 @@ def _build_close_event(trade: dict) -> dict:
     return event
 
 
+def _build_blended_close(
+    trade: dict,
+    final_price: float,
+    exit_reason: str,
+    closed_at: datetime | None,
+    partial_tp1_hit: bool,
+    partial_tp1_price: float | None,
+    partial_tp2_hit: bool,
+    partial_tp2_price: float | None,
+    peak_price: float,
+    trailing_stop_price: float,
+) -> dict:
+    """Build close-update fields with blended partial-exit P&L."""
+    entry_price = float(trade["entry_price"])
+    position_size = _safe_float(trade.get("simulated_position_size"), default=50) or 50
+
+    tp1_frac = 0.5
+    tp2_frac = 0.3
+
+    # Build weighted blended exit price.
+    weighted = 0.0
+    allocated = 0.0
+
+    if partial_tp1_hit and partial_tp1_price:
+        weighted += tp1_frac * float(partial_tp1_price)
+        allocated += tp1_frac
+
+    if partial_tp2_hit and partial_tp2_price:
+        weighted += tp2_frac * float(partial_tp2_price)
+        allocated += tp2_frac
+
+    remaining = 1.0 - allocated
+    weighted += remaining * float(final_price)
+
+    blended_pnl_pct = (weighted - entry_price) / entry_price * 100
+
+    return {
+        "status": "closed",
+        "closed_at": _format_timestamp(closed_at) if closed_at else _utc_now_iso(),
+        "exit_price": round(float(final_price), 8),
+        "exit_reason": exit_reason,
+        "pnl_pct": round(blended_pnl_pct, 2),
+        "pnl_amount": round(position_size * (blended_pnl_pct / 100), 2),
+        "blended_pnl_pct": round(blended_pnl_pct, 2),
+        "peak_price": round(peak_price, 8),
+        "trailing_stop_price": round(trailing_stop_price, 8),
+        "partial_tp1_hit": partial_tp1_hit,
+        "partial_tp2_hit": partial_tp2_hit,
+        "partial_tp1_price": round(partial_tp1_price, 8) if partial_tp1_price else None,
+        "partial_tp2_price": round(partial_tp2_price, 8) if partial_tp2_price else None,
+    }
+
+
 def _build_close_updates(
     trade: dict,
     exit_price: float,
     exit_reason: str,
     closed_at: datetime | None,
 ) -> dict:
-    """Build update fields for a closed paper trade."""
+    """Build update fields for a closed paper trade (simple, no partial TPs)."""
     entry_price = float(trade["entry_price"])
     pnl_pct = ((exit_price - entry_price) / entry_price) * 100
-    position_size = _safe_float(trade.get("simulated_position_size"), default=100) or 100
+    position_size = _safe_float(trade.get("simulated_position_size"), default=50) or 50
 
     return {
         "status": "closed",
@@ -875,6 +1009,19 @@ def _trade_plan_value(trade_plan: dict, key: str, fallback: Any) -> Any:
         return trade_plan.get(key)
 
     return fallback
+
+
+def _score_based_max_hold_hours(score: Any, strategy: PaperTradingStrategy) -> int:
+    """Return the appropriate max hold window based on opportunity score."""
+    try:
+        score_int = int(score or 0)
+    except (TypeError, ValueError):
+        score_int = 0
+
+    if score_int >= strategy.high_score_threshold:
+        return strategy.high_score_max_hold_hours
+
+    return strategy.max_hold_hours
 
 
 def _get_trade_plan_type(result: dict, trade_plan: dict) -> str | None:

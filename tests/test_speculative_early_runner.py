@@ -173,7 +173,7 @@ def test_speculative_paper_trade_created_only_when_plan_allows(
     assert saved_trades[0]["alert_type"] == "Speculative Early Runner Alert"
     assert saved_trades[0]["trade_plan_type"] == "speculative_early_runner"
     assert saved_trades[0]["simulated_position_size"] == 25
-    assert saved_trades[0]["stop_loss_pct"] == -7
+    assert saved_trades[0]["stop_loss_pct"] == -10
     assert saved_trades[0]["take_profit_1_pct"] == 10
     assert saved_trades[0]["take_profit_2_pct"] == 20
     assert saved_trades[0]["take_profit_3_pct"] == 35
