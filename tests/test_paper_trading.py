@@ -273,15 +273,17 @@ def test_create_paper_trades_persists_created_and_skipped_decisions(
     assert "below 55" in updated_alerts[1][3]
 
 
-def test_create_paper_trades_blocks_thin_liquidity_despite_strategy_allowance(
+def test_create_paper_trades_blocks_thin_liquidity_without_tradability_score(
     monkeypatch,
     tmp_path,
 ) -> None:
-    """PAPER_MIN_LIQUIDITY is a hard floor that overrides allow_thin_liquidity."""
+    """PAPER_MIN_LIQUIDITY is a hard floor overriding allow_thin_liquidity, unless
+    a tradability_score is available to route the trade into the experiment lane."""
     trades_file = tmp_path / "paper_trades.json"
     events_file = tmp_path / "paper_trade_events.json"
     alert = _eligible_alert()
     alert["liquidity_signal"] = {"label": "Thin"}
+    del alert["tradability_signal"]
 
     monkeypatch.setattr(paper_trading, "USE_SUPABASE", False)
     monkeypatch.setattr(paper_trading, "PAPER_TRADES_FILE", str(trades_file))
@@ -292,6 +294,50 @@ def test_create_paper_trades_blocks_thin_liquidity_despite_strategy_allowance(
     assert decisions[0]["decision"] == "ineligible"
     assert decisions[0]["paper_trade_created"] is False
     assert "PAPER_MIN_LIQUIDITY" in decisions[0]["reason"]
+
+
+def test_create_paper_trades_routes_thin_liquidity_to_experiment_lane(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """Thin/Very-thin coins with a tradability_score reading go to the paper-only
+    experiment lane instead of being rejected outright, so we can observe whether
+    tradability_score predicts NET profitability independent of liquidity_label."""
+    trades_file = tmp_path / "paper_trades.json"
+    events_file = tmp_path / "paper_trade_events.json"
+    alert = _eligible_alert()
+    alert["liquidity_signal"] = {"label": "Very thin"}
+    alert["tradability_signal"] = {"score": 20}
+
+    monkeypatch.setattr(paper_trading, "USE_SUPABASE", False)
+    monkeypatch.setattr(paper_trading, "PAPER_TRADES_FILE", str(trades_file))
+    monkeypatch.setattr(paper_trading, "PAPER_TRADE_EVENTS_FILE", str(events_file))
+
+    decisions = paper_trading.create_paper_trades_from_alerts([alert])
+    saved_trades = json.loads(trades_file.read_text(encoding="utf-8"))
+
+    assert decisions[0]["decision"] == "created"
+    assert decisions[0]["paper_trade_created"] is True
+    assert decisions[0]["strategy_name"] == "tradability_experiment_paper"
+    assert saved_trades[0]["strategy_name"] == "tradability_experiment_paper"
+    assert saved_trades[0]["trade_plan_type"] == "tradability_experiment_paper"
+    assert saved_trades[0]["liquidity_label"] == "Very thin"
+    assert saved_trades[0]["simulated_position_size"] == 10
+
+
+def test_experiment_lane_does_not_apply_to_parabolic_alerts() -> None:
+    """Parabolic/Speculative lanes already handle thin liquidity themselves —
+    the experiment lane only applies to standard continuation-style alerts."""
+    alert = _eligible_alert()
+    alert["alert_type"] = paper_trading.PARABOLIC_WATCH_ALERT_TYPE
+    alert["liquidity_signal"] = {"label": "Very thin"}
+    alert["tradability_signal"] = {"score": 80}
+
+    result = paper_trading._tradability_experiment_candidate(
+        alert, paper_trading.PARABOLIC_WATCH_ALERT_TYPE
+    )
+
+    assert result is None
 
 
 def test_create_paper_trades_blocks_low_tradability_score(

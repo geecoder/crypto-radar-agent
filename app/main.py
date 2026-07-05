@@ -67,6 +67,7 @@ from app.storage.supabase_store import (
 from app.trading.paper_trading import (
     create_paper_trades_from_alerts,
     load_all_paper_trades,
+    TRADABILITY_EXPERIMENT_STRATEGY_NAME,
     update_open_paper_trades,
 )
 from app.trading.strategy_config import get_strategy_by_name
@@ -262,7 +263,11 @@ def _run_go_live_check() -> None:
 
     print("Evaluating go-live preconditions…")
     paper_trades = load_all_paper_trades()
-    closed = [t for t in paper_trades if t.get("status") == "closed"]
+    closed = [
+        t for t in paper_trades
+        if t.get("status") == "closed"
+        and t.get("strategy_name") != TRADABILITY_EXPERIMENT_STRATEGY_NAME
+    ]
     last_100 = closed[-100:] if len(closed) >= 100 else closed
 
     wins = sum(1 for t in last_100 if _net_pnl(t) > 0)
@@ -308,7 +313,11 @@ def _run_go_live_report() -> None:
     BLOCK3_DATE = "2026-06-18"
 
     paper_trades = load_all_paper_trades()
-    closed = [t for t in paper_trades if t.get("status") == "closed"]
+    closed = [
+        t for t in paper_trades
+        if t.get("status") == "closed"
+        and t.get("strategy_name") != TRADABILITY_EXPERIMENT_STRATEGY_NAME
+    ]
 
     # Win rate over last 100 closed trades (NET of fees/slippage).
     last_100 = closed[-100:] if len(closed) >= 100 else closed

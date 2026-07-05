@@ -126,6 +126,30 @@ def get_speculative_early_runner_strategy() -> PaperTradingStrategy:
     )
 
 
+def get_tradability_experiment_strategy() -> PaperTradingStrategy:
+    """Return the tradability-score experiment paper-only strategy.
+
+    Trades Thin/Very-thin liquidity coins that the PAPER_MIN_LIQUIDITY floor
+    would otherwise block, purely to observe whether tradability_score
+    predicts NET profitability independent of the coarse liquidity label.
+    Small position size and paper-only — excluded from go-live gate math.
+    """
+    return PaperTradingStrategy(
+        name="tradability_experiment_paper",
+        minimum_opportunity_score=55,
+        min_move_from_recent_low_pct=3,
+        max_move_from_recent_low_pct=20,
+        allow_thin_liquidity=True,
+        allow_high_exhaustion=False,
+        stop_loss_pct=-10,
+        take_profit_1_pct=8,
+        take_profit_2_pct=15,
+        take_profit_3_pct=20,
+        max_hold_hours=24,
+        simulated_position_size=10,
+    )
+
+
 def get_strategy_by_name(name: str | None) -> PaperTradingStrategy:
     """Return a paper trading strategy by short CLI name."""
     if name is None:

@@ -22,6 +22,7 @@ from app.trading.strategy_config import (
     get_default_paper_trading_strategy,
     get_parabolic_paper_strategy,
     get_speculative_early_runner_strategy,
+    get_tradability_experiment_strategy,
 )
 from app.utils.logger import get_logger
 
@@ -61,6 +62,13 @@ MAX_OPEN_PAPER_TRADES_BY_ALERT_TYPE = {
     "Continuation Alert": 10,
 }
 MAX_TOTAL_OPEN_PAPER_TRADES = 20
+# Paper-only lane that trades Thin/Very-thin coins the liquidity floor would
+# otherwise block, gated only by tradability_score, purely to observe whether
+# tradability_score predicts NET profitability independent of the coarse
+# liquidity label. Excluded from go-live gate math — see app/main.py.
+TRADABILITY_EXPERIMENT_STRATEGY_NAME = "tradability_experiment_paper"
+TRADABILITY_EXPERIMENT_TRADE_PLAN_TYPE = "tradability_experiment_paper"
+MAX_OPEN_TRADABILITY_EXPERIMENT_TRADES = 10
 MAX_HOLD_EXPIRED_EVENT_NOTES = (
     "Closed stale paper trade because max_hold_hours was reached."
 )
@@ -350,8 +358,21 @@ def create_paper_trades_from_alerts(
             )
 
             if not hard_gate_ok:
-                eligible = False
-                reason = hard_gate_reason
+                experiment_candidate = _tradability_experiment_candidate(
+                    candidate_for_trade, alert_type
+                )
+
+                if experiment_candidate is not None:
+                    selected_strategy = get_tradability_experiment_strategy()
+                    candidate_for_trade = experiment_candidate
+                    reason = (
+                        "Blocked by PAPER_MIN_LIQUIDITY floor; routed to the "
+                        "tradability_score experiment lane (paper-only, "
+                        "excluded from go-live gate math)."
+                    )
+                else:
+                    eligible = False
+                    reason = hard_gate_reason
 
         symbol = str(candidate.get("symbol") or "UNKNOWN")
         trade_plan = _get_trade_plan(candidate_for_trade)
@@ -374,6 +395,14 @@ def create_paper_trades_from_alerts(
         concentration_ok, concentration_reason = (
             can_create_more_trades_for_alert_type(alert_type, open_trades)
         )
+
+        if (
+            concentration_ok
+            and selected_strategy.name == TRADABILITY_EXPERIMENT_STRATEGY_NAME
+            and not _can_create_more_experiment_trades(open_trades)
+        ):
+            concentration_ok = False
+            concentration_reason = "Tradability experiment lane open-trade limit reached."
 
         if not concentration_ok:
             decision.update(
@@ -1287,10 +1316,10 @@ def _get_tradability_score(result: dict) -> Any:
     return tradability_signal.get("score")
 
 
-def _meets_hard_trade_gates(result: dict) -> tuple[bool, str]:
-    """Non-negotiable gates applied to every alert type before any paper trade opens.
+def _meets_liquidity_gate(result: dict) -> tuple[bool, str]:
+    """Hard liquidity floor applied to every alert type before any trade opens.
 
-    These override per-strategy allow_thin_liquidity settings: Very thin/Thin
+    Overrides per-strategy allow_thin_liquidity settings: Very thin/Thin
     liquidity coins lose money in the historical data (-1.25% / -0.73% gross)
     while Good+ liquidity is the only profitable tier, so no trade may open
     below the liquidity floor regardless of strategy.
@@ -1304,6 +1333,11 @@ def _meets_hard_trade_gates(result: dict) -> tuple[bool, str]:
             f"PAPER_MIN_LIQUIDITY floor of '{PAPER_MIN_LIQUIDITY}'.",
         )
 
+    return True, "Liquidity gate passed."
+
+
+def _meets_tradability_gate(result: dict) -> tuple[bool, str]:
+    """Hard tradability floor — order-book depth and spread must be tradeable."""
     tradability_score = _safe_float(_get_tradability_score(result), default=None)
 
     if tradability_score is None or tradability_score < PAPER_MIN_TRADABILITY_SCORE:
@@ -1314,7 +1348,64 @@ def _meets_hard_trade_gates(result: dict) -> tuple[bool, str]:
             f"PAPER_MIN_TRADABILITY_SCORE floor of {PAPER_MIN_TRADABILITY_SCORE:g}.",
         )
 
+    return True, "Tradability gate passed."
+
+
+def _meets_hard_trade_gates(result: dict) -> tuple[bool, str]:
+    """Non-negotiable gates applied to every alert type before any paper trade opens."""
+    liquidity_ok, liquidity_reason = _meets_liquidity_gate(result)
+
+    if not liquidity_ok:
+        return False, liquidity_reason
+
+    tradability_ok, tradability_reason = _meets_tradability_gate(result)
+
+    if not tradability_ok:
+        return False, tradability_reason
+
     return True, "Hard trade gates passed."
+
+
+def _tradability_experiment_candidate(result: dict, alert_type: str) -> dict | None:
+    """Return a result routed into the tradability-score experiment lane, or None.
+
+    Only routes trades blocked purely by the liquidity floor (not a missing or
+    low tradability score) for the standard alert types — Parabolic and
+    Speculative Early Runner already have their own thin-liquidity handling.
+    No tradability_score minimum is applied here on purpose: we need samples
+    across the full score range to find where NET expectancy turns positive.
+    """
+    if alert_type not in PAPER_TRADE_ALLOWED_ALERT_TYPES:
+        return None
+
+    liquidity_ok, _ = _meets_liquidity_gate(result)
+
+    if liquidity_ok:
+        return None
+
+    if _safe_float(_get_tradability_score(result), default=None) is None:
+        return None
+
+    return {
+        **result,
+        "trade_plan": {
+            **_get_trade_plan(result),
+            "trade_plan_type": TRADABILITY_EXPERIMENT_TRADE_PLAN_TYPE,
+        },
+    }
+
+
+def _can_create_more_experiment_trades(open_trades: list[dict]) -> bool:
+    """Return whether the tradability experiment lane is under its open-trade cap."""
+    active_experiment_trades = sum(
+        1
+        for trade in open_trades
+        if isinstance(trade, dict)
+        and str(trade.get("status", "open")).lower() == "open"
+        and trade.get("strategy_name") == TRADABILITY_EXPERIMENT_STRATEGY_NAME
+    )
+
+    return active_experiment_trades < MAX_OPEN_TRADABILITY_EXPERIMENT_TRADES
 
 
 def _get_quote_volume(result: dict) -> Any:
