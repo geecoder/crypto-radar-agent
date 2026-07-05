@@ -69,6 +69,7 @@ def build_alert_history_record(result: dict, telegram_sent: bool) -> dict:
         "move_stage": _move_stage(result),
         "move_from_recent_low_pct": _move_from_recent_low_pct(result),
         "liquidity_label": _liquidity_label(result),
+        "tradability_score": _tradability_score(result),
         "exhaustion_risk_level": _exhaustion_risk_level(result),
         "risk_level": opportunity.get("risk_level"),
         "alert_type": _alert_type(result),
@@ -175,6 +176,13 @@ def _liquidity_label(result: dict) -> Any:
     liquidity_signal = _dict_value(result.get("liquidity_signal"))
 
     return liquidity_signal.get("label") or result.get("liquidity_label")
+
+
+def _tradability_score(result: dict) -> Any:
+    """Read tradability score from tradability_signal or top-level data."""
+    tradability_signal = _dict_value(result.get("tradability_signal"))
+
+    return tradability_signal.get("score") or result.get("tradability_score")
 
 
 def _exhaustion_risk_level(result: dict) -> Any:

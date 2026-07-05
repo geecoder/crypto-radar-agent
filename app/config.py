@@ -33,6 +33,15 @@ class Settings:
     telegram_alerts_enabled: bool = (
         os.getenv("TELEGRAM_ALERTS_ENABLED", "false").lower() == "true"
     )
+    # Hard liquidity floor for paper (and future live) trade eligibility.
+    # Data showed Very thin/Thin coins lose money while Good+ liquidity is
+    # the only profitable tier — see PAPER_MIN_LIQUIDITY gate in paper_trading.py.
+    paper_min_liquidity: str = (
+        os.getenv("PAPER_MIN_LIQUIDITY", "Good").strip() or "Good"
+    )
+    paper_min_tradability_score: int = int(
+        os.getenv("PAPER_MIN_TRADABILITY_SCORE", "55")
+    )
 
 
 settings = Settings()
@@ -48,3 +57,5 @@ USE_SUPABASE = (
     PERSISTENCE_BACKEND.lower() == "supabase"
     and SUPABASE_DATABASE_URL != ""
 )
+PAPER_MIN_LIQUIDITY = settings.paper_min_liquidity
+PAPER_MIN_TRADABILITY_SCORE = settings.paper_min_tradability_score

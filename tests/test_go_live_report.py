@@ -10,6 +10,7 @@ def _msg(
     closed=120, win_rate_100=47.0, avg_pnl=1.2, tg_rate=96.0,
     win_this=49.0, win_last=44.0,
     post_b3=45, breakdown=None, total=120,
+    good_liq_closed=100, good_liq_net_avg=1.0,
 ):
     gates = check_go_live_preconditions(
         closed_paper_trade_count=closed,
@@ -17,6 +18,8 @@ def _msg(
         avg_pnl_last_100=avg_pnl,
         telegram_send_rate_7d=tg_rate,
         risk_manager_active=True,
+        good_liquidity_closed_trade_count=good_liq_closed,
+        good_liquidity_net_avg_pnl_pct=good_liq_net_avg,
     )
     return format_go_live_telegram_message(
         gates=gates,

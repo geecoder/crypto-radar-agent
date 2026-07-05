@@ -31,6 +31,9 @@ def _parabolic_alert() -> dict:
             "label": "Good",
             "quote_volume": 20_000_000,
         },
+        "tradability_signal": {
+            "score": 65,
+        },
         "exhaustion_signal": {
             "risk_level": "Medium",
         },

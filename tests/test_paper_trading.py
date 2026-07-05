@@ -34,6 +34,9 @@ def _eligible_alert() -> dict:
         "liquidity_signal": {
             "label": "Strong",
         },
+        "tradability_signal": {
+            "score": 80,
+        },
         "exhaustion_signal": {
             "risk_level": "Medium",
         },
@@ -270,6 +273,75 @@ def test_create_paper_trades_persists_created_and_skipped_decisions(
     assert "below 55" in updated_alerts[1][3]
 
 
+def test_create_paper_trades_blocks_thin_liquidity_despite_strategy_allowance(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """PAPER_MIN_LIQUIDITY is a hard floor that overrides allow_thin_liquidity."""
+    trades_file = tmp_path / "paper_trades.json"
+    events_file = tmp_path / "paper_trade_events.json"
+    alert = _eligible_alert()
+    alert["liquidity_signal"] = {"label": "Thin"}
+
+    monkeypatch.setattr(paper_trading, "USE_SUPABASE", False)
+    monkeypatch.setattr(paper_trading, "PAPER_TRADES_FILE", str(trades_file))
+    monkeypatch.setattr(paper_trading, "PAPER_TRADE_EVENTS_FILE", str(events_file))
+
+    decisions = paper_trading.create_paper_trades_from_alerts([alert])
+
+    assert decisions[0]["decision"] == "ineligible"
+    assert decisions[0]["paper_trade_created"] is False
+    assert "PAPER_MIN_LIQUIDITY" in decisions[0]["reason"]
+
+
+def test_create_paper_trades_blocks_low_tradability_score(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    trades_file = tmp_path / "paper_trades.json"
+    events_file = tmp_path / "paper_trade_events.json"
+    alert = _eligible_alert()
+    alert["tradability_signal"] = {"score": 10}
+
+    monkeypatch.setattr(paper_trading, "USE_SUPABASE", False)
+    monkeypatch.setattr(paper_trading, "PAPER_TRADES_FILE", str(trades_file))
+    monkeypatch.setattr(paper_trading, "PAPER_TRADE_EVENTS_FILE", str(events_file))
+
+    decisions = paper_trading.create_paper_trades_from_alerts([alert])
+
+    assert decisions[0]["decision"] == "ineligible"
+    assert decisions[0]["paper_trade_created"] is False
+    assert "PAPER_MIN_TRADABILITY_SCORE" in decisions[0]["reason"]
+
+
+def test_create_paper_trades_logs_shadow_trade_on_open(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    trades_file = tmp_path / "paper_trades.json"
+    events_file = tmp_path / "paper_trade_events.json"
+    shadow_calls = []
+
+    class FakeExecutor:
+        def place_market_buy(self, symbol, quantity, price=None, metadata=None):
+            shadow_calls.append((symbol, quantity, price, metadata))
+            return {}
+
+    monkeypatch.setattr(paper_trading, "USE_SUPABASE", False)
+    monkeypatch.setattr(paper_trading, "PAPER_TRADES_FILE", str(trades_file))
+    monkeypatch.setattr(paper_trading, "PAPER_TRADE_EVENTS_FILE", str(events_file))
+    monkeypatch.setattr(paper_trading, "BinanceExecutor", FakeExecutor)
+
+    paper_trading.create_paper_trades_from_alerts([_eligible_alert()])
+
+    assert len(shadow_calls) == 1
+    symbol, quantity, price, metadata = shadow_calls[0]
+    assert symbol == "BTCUSDT"
+    assert price == 100.0
+    assert quantity == 50 / 100.0
+    assert metadata["liquidity_label"] == "Strong"
+
+
 def test_evaluate_open_paper_trade_stop_loss() -> None:
     opened_at = datetime(2026, 5, 17, tzinfo=timezone.utc)
     updates = evaluate_open_paper_trade(
@@ -292,6 +364,10 @@ def test_evaluate_open_paper_trade_stop_loss() -> None:
     assert updates["exit_price"] == 95.0
     assert updates["pnl_pct"] == -5.0
     assert updates["pnl_amount"] == -5.0
+    # No liquidity_label on the fixture -> worst-case default slippage (1.5%).
+    assert updates["gross_pnl_pct"] == -5.0
+    assert updates["net_pnl_pct"] == -6.7
+    assert updates["net_pnl_amount"] == -6.7
 
 
 def test_evaluate_open_paper_trade_take_profit() -> None:
@@ -320,6 +396,9 @@ def test_evaluate_open_paper_trade_take_profit() -> None:
     assert updates["partial_tp1_hit"] is True
     assert updates["partial_tp2_hit"] is True
     assert updates["blended_pnl_pct"] == 12.5
+    assert updates["gross_pnl_pct"] == 12.5
+    assert updates["net_pnl_pct"] == 10.8
+    assert updates["net_pnl_amount"] == 10.8
 
 
 def test_evaluate_open_paper_trade_max_hold_expiry() -> None:
@@ -344,3 +423,25 @@ def test_evaluate_open_paper_trade_max_hold_expiry() -> None:
     assert updates["exit_price"] == 103.0
     assert updates["pnl_pct"] == 3.0
     assert updates["pnl_amount"] == 3.0
+    assert updates["gross_pnl_pct"] == 3.0
+    assert updates["net_pnl_pct"] == 1.3
+    assert updates["net_pnl_amount"] == 1.3
+
+
+def test_evaluate_open_paper_trade_net_pnl_scales_with_liquidity() -> None:
+    """Net P&L subtracts fees + liquidity-scaled slippage (Good=0.3%, Thin=0.8%)."""
+    opened_at = datetime(2026, 5, 17, tzinfo=timezone.utc)
+    trade = _open_trade(opened_at)
+    trade["liquidity_label"] = "Good"
+
+    updates = evaluate_open_paper_trade(
+        trade,
+        _candles(
+            opened_at,
+            [{"hours_after_open": 1, "high": 103.0, "low": 94.0, "close": 96.0}],
+        ),
+    )
+
+    assert updates["gross_pnl_pct"] == -5.0
+    # Good liquidity: -5.0 - 0.2 (fee) - 0.3 (slippage) = -5.5
+    assert updates["net_pnl_pct"] == -5.5

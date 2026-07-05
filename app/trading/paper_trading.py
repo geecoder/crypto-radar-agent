@@ -12,7 +12,9 @@ from typing import Any
 import pandas as pd
 
 from app.binance.client import klines_to_dataframe
-from app.config import USE_SUPABASE
+from app.config import PAPER_MIN_LIQUIDITY, PAPER_MIN_TRADABILITY_SCORE, USE_SUPABASE
+from app.exchange.binance_executor import BinanceExecutor
+from app.indicators.liquidity import meets_liquidity_floor
 from app.risk.risk_manager import RiskConfig, evaluate_trade_risk
 from app.storage import supabase_store
 from app.trading.strategy_config import (
@@ -25,6 +27,17 @@ from app.utils.logger import get_logger
 
 PAPER_TRADES_FILE = "data/paper_trades.json"
 PAPER_TRADE_EVENTS_FILE = "data/paper_trade_events.json"
+# Round-trip fee + liquidity-scaled slippage subtracted from every paper trade's
+# gross P&L to get a realistic net P&L. Go-live gates must use NET, never gross.
+ROUND_TRIP_FEE_PCT = 0.2
+SLIPPAGE_PCT_BY_LIQUIDITY = {
+    "excellent": 0.2,
+    "strong": 0.2,
+    "good": 0.3,
+    "thin": 0.8,
+    "very thin": 1.5,
+}
+DEFAULT_SLIPPAGE_PCT = 1.5
 ALLOWED_CONTINUATION_TARGETS = {
     "+20% continuation watch",
     "+50% high-volatility watch",
@@ -85,6 +98,7 @@ def build_paper_trade_from_alert(
         "move_stage": _get_move_stage(result),
         "move_from_recent_low_pct": _get_move_from_recent_low_pct(result),
         "liquidity_label": _get_liquidity_label(result),
+        "tradability_score": _get_tradability_score(result),
         "exhaustion_risk_level": _get_exhaustion_risk_level(result),
         "stop_loss_pct": _trade_plan_value(
             trade_plan,
@@ -330,6 +344,15 @@ def create_paper_trades_from_alerts(
         else:
             eligible, reason = should_create_paper_trade(candidate, strategy)
 
+        if eligible:
+            hard_gate_ok, hard_gate_reason = _meets_hard_trade_gates(
+                candidate_for_trade
+            )
+
+            if not hard_gate_ok:
+                eligible = False
+                reason = hard_gate_reason
+
         symbol = str(candidate.get("symbol") or "UNKNOWN")
         trade_plan = _get_trade_plan(candidate_for_trade)
         trade_plan_type = _get_trade_plan_type(candidate_for_trade, trade_plan)
@@ -407,6 +430,7 @@ def create_paper_trades_from_alerts(
         trade = build_paper_trade_from_alert(candidate_for_trade, selected_strategy)
         _insert_paper_trade(trade)
         _insert_paper_trade_event(_build_trade_event(trade, "opened"))
+        _log_shadow_trade_open(trade)
         open_trade_symbols.add(symbol)
         open_trades.append(trade)
         decision.update(
@@ -670,6 +694,7 @@ def update_open_paper_trades(client) -> dict:
             _update_paper_trade(str(trade.get("id")), updates)
             closed_trade = {**trade, **updates}
             _insert_paper_trade_event(_build_close_event(closed_trade))
+            _log_shadow_trade_close(closed_trade)
             exit_reason = str(updates.get("exit_reason") or "")
 
             if exit_reason == "max_hold_expired":
@@ -776,6 +801,72 @@ def _insert_paper_trade_event(event: dict) -> None:
     _save_json_list(PAPER_TRADE_EVENTS_FILE, events)
 
 
+def _shadow_quantity(trade: dict) -> float | None:
+    """Return a shadow-order quantity sized from the trade's simulated position."""
+    entry_price = _safe_float(trade.get("entry_price"), default=None)
+
+    if entry_price is None or entry_price <= 0:
+        return None
+
+    position_size = _safe_float(trade.get("simulated_position_size"), default=50) or 50
+
+    return position_size / entry_price
+
+
+def _log_shadow_trade_open(trade: dict) -> None:
+    """Mirror a paper-trade open into shadow_trades with the real order-book price.
+
+    Lets us compare the paper fill price against what a live order would
+    actually have filled at, at the moment the trade opened.
+    """
+    quantity = _shadow_quantity(trade)
+
+    if quantity is None:
+        return
+
+    try:
+        BinanceExecutor().place_market_buy(
+            str(trade.get("symbol") or ""),
+            quantity,
+            price=_safe_float(trade.get("entry_price"), default=None),
+            metadata={
+                "paper_trade_id": trade.get("id"),
+                "alert_history_id": trade.get("alert_history_id"),
+                "liquidity_label": trade.get("liquidity_label"),
+            },
+        )
+    except Exception as exc:
+        logger.warning(
+            "Failed to log shadow open trade for %s: %s", trade.get("symbol"), exc
+        )
+
+
+def _log_shadow_trade_close(trade: dict) -> None:
+    """Mirror a paper-trade close into shadow_trades with the real order-book price."""
+    quantity = _shadow_quantity(trade)
+    exit_price = _safe_float(trade.get("exit_price"), default=None)
+
+    if quantity is None or exit_price is None or exit_price <= 0:
+        return
+
+    try:
+        BinanceExecutor().place_market_sell(
+            str(trade.get("symbol") or ""),
+            quantity,
+            price=exit_price,
+            metadata={
+                "paper_trade_id": trade.get("id"),
+                "alert_history_id": trade.get("alert_history_id"),
+                "exit_reason": trade.get("exit_reason"),
+                "liquidity_label": trade.get("liquidity_label"),
+            },
+        )
+    except Exception as exc:
+        logger.warning(
+            "Failed to log shadow close trade for %s: %s", trade.get("symbol"), exc
+        )
+
+
 def load_paper_trades(limit: int | None = None) -> list[dict]:
     """Load persisted paper trades from the configured backend."""
     if USE_SUPABASE:
@@ -863,6 +954,7 @@ def _build_blended_close(
     weighted += remaining * float(final_price)
 
     blended_pnl_pct = (weighted - entry_price) / entry_price * 100
+    net_pnl_pct = _net_pnl_pct(blended_pnl_pct, trade.get("liquidity_label"))
 
     return {
         "status": "closed",
@@ -872,6 +964,9 @@ def _build_blended_close(
         "pnl_pct": round(blended_pnl_pct, 2),
         "pnl_amount": round(position_size * (blended_pnl_pct / 100), 2),
         "blended_pnl_pct": round(blended_pnl_pct, 2),
+        "gross_pnl_pct": round(blended_pnl_pct, 2),
+        "net_pnl_pct": round(net_pnl_pct, 2),
+        "net_pnl_amount": round(position_size * (net_pnl_pct / 100), 2),
         "peak_price": round(peak_price, 8),
         "trailing_stop_price": round(trailing_stop_price, 8),
         "partial_tp1_hit": partial_tp1_hit,
@@ -890,6 +985,7 @@ def _build_close_updates(
     """Build update fields for a closed paper trade (simple, no partial TPs)."""
     entry_price = float(trade["entry_price"])
     pnl_pct = ((exit_price - entry_price) / entry_price) * 100
+    net_pnl_pct = _net_pnl_pct(pnl_pct, trade.get("liquidity_label"))
     position_size = _safe_float(trade.get("simulated_position_size"), default=50) or 50
 
     return {
@@ -899,7 +995,19 @@ def _build_close_updates(
         "exit_reason": exit_reason,
         "pnl_pct": round(pnl_pct, 2),
         "pnl_amount": round(position_size * (pnl_pct / 100), 2),
+        "gross_pnl_pct": round(pnl_pct, 2),
+        "net_pnl_pct": round(net_pnl_pct, 2),
+        "net_pnl_amount": round(position_size * (net_pnl_pct / 100), 2),
     }
+
+
+def _net_pnl_pct(gross_pnl_pct: float, liquidity_label: Any) -> float:
+    """Subtract round-trip fees and liquidity-scaled slippage from a gross P&L."""
+    slippage_pct = SLIPPAGE_PCT_BY_LIQUIDITY.get(
+        str(liquidity_label or "").strip().lower(),
+        DEFAULT_SLIPPAGE_PCT,
+    )
+    return gross_pnl_pct - ROUND_TRIP_FEE_PCT - slippage_pct
 
 
 def _build_stale_paper_trade_updates(trade: dict, candles_df) -> dict | None:
@@ -1166,6 +1274,47 @@ def _get_liquidity_score(result: dict) -> Any:
         return flattened_score
 
     return liquidity_signal.get("score")
+
+
+def _get_tradability_score(result: dict) -> Any:
+    """Read the tradability score from nested or flattened alert data."""
+    tradability_signal = result.get("tradability_signal") or {}
+    flattened_score = _first_present(result, "tradability_score")
+
+    if flattened_score is not None:
+        return flattened_score
+
+    return tradability_signal.get("score")
+
+
+def _meets_hard_trade_gates(result: dict) -> tuple[bool, str]:
+    """Non-negotiable gates applied to every alert type before any paper trade opens.
+
+    These override per-strategy allow_thin_liquidity settings: Very thin/Thin
+    liquidity coins lose money in the historical data (-1.25% / -0.73% gross)
+    while Good+ liquidity is the only profitable tier, so no trade may open
+    below the liquidity floor regardless of strategy.
+    """
+    liquidity_label = str(_get_liquidity_label(result) or "").strip()
+
+    if not meets_liquidity_floor(liquidity_label, PAPER_MIN_LIQUIDITY):
+        return (
+            False,
+            f"Liquidity '{liquidity_label or 'Unknown'}' is below the "
+            f"PAPER_MIN_LIQUIDITY floor of '{PAPER_MIN_LIQUIDITY}'.",
+        )
+
+    tradability_score = _safe_float(_get_tradability_score(result), default=None)
+
+    if tradability_score is None or tradability_score < PAPER_MIN_TRADABILITY_SCORE:
+        score_text = "Unknown" if tradability_score is None else f"{tradability_score:g}"
+        return (
+            False,
+            f"Tradability score {score_text} is below the "
+            f"PAPER_MIN_TRADABILITY_SCORE floor of {PAPER_MIN_TRADABILITY_SCORE:g}.",
+        )
+
+    return True, "Hard trade gates passed."
 
 
 def _get_quote_volume(result: dict) -> Any:

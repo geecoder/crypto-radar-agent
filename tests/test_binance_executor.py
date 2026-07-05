@@ -9,7 +9,8 @@ from app.exchange.binance_executor import (
 
 
 def _gates(
-    closed=100, win_rate=60.0, avg_pnl=2.5, tg_rate=95.0, risk=True
+    closed=100, win_rate=60.0, avg_pnl=2.5, tg_rate=95.0, risk=True,
+    good_liq_closed=100, good_liq_net_avg=1.0,
 ) -> list[GoLiveGate]:
     return check_go_live_preconditions(
         closed_paper_trade_count=closed,
@@ -17,6 +18,8 @@ def _gates(
         avg_pnl_last_100=avg_pnl,
         telegram_send_rate_7d=tg_rate,
         risk_manager_active=risk,
+        good_liquidity_closed_trade_count=good_liq_closed,
+        good_liquidity_net_avg_pnl_pct=good_liq_net_avg,
     )
 
 
@@ -58,6 +61,20 @@ def test_fails_when_risk_manager_not_active() -> None:
     assert all_go_live_gates_pass(gates) is False
     failing = [g for g in gates if not g.passed]
     assert any(g.name == "risk_manager_active" for g in failing)
+
+
+def test_fails_when_good_liquidity_expectancy_not_met() -> None:
+    gates = _gates(good_liq_closed=40, good_liq_net_avg=1.0)
+    assert all_go_live_gates_pass(gates) is False
+    failing = [g for g in gates if not g.passed]
+    assert any(g.name == "good_liquidity_net_expectancy" for g in failing)
+
+
+def test_fails_when_good_liquidity_net_expectancy_negative() -> None:
+    gates = _gates(good_liq_closed=150, good_liq_net_avg=-0.5)
+    assert all_go_live_gates_pass(gates) is False
+    failing = [g for g in gates if not g.passed]
+    assert any(g.name == "good_liquidity_net_expectancy" for g in failing)
 
 
 def test_format_go_live_report_shows_pass_fail() -> None:

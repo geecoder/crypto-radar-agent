@@ -51,15 +51,20 @@ def check_go_live_preconditions(
     avg_pnl_last_100: float,
     telegram_send_rate_7d: float,
     risk_manager_active: bool,
+    good_liquidity_closed_trade_count: int = 0,
+    good_liquidity_net_avg_pnl_pct: float = 0.0,
 ) -> list[GoLiveGate]:
     """Evaluate all go-live gates. ALL must pass before live trading is enabled.
 
     Gates:
     1. >= 100 closed paper trades
-    2. >= 55% win rate over last 100 trades
-    3. Positive average P&L over last 100 trades
+    2. >= 55% win rate over last 100 trades (NET of fees/slippage)
+    3. Positive average P&L over last 100 trades (NET of fees/slippage)
     4. Telegram send rate >= 90% over last 7 days
     5. risk_manager module active and tested
+    6. >= 100 Good-liquidity-or-better trades with positive NET expectancy —
+       Good liquidity is the only tier that has shown a positive edge; a
+       thin/very-thin-heavy sample passing gates 1-3 is not sufficient.
     """
     return [
         GoLiveGate(
@@ -100,6 +105,19 @@ def check_go_live_preconditions(
             detail=(
                 "risk_manager module: "
                 f"{'PASS — active' if risk_manager_active else 'FAIL — not initialised'}."
+            ),
+        ),
+        GoLiveGate(
+            name="good_liquidity_net_expectancy",
+            passed=(
+                good_liquidity_closed_trade_count >= 100
+                and good_liquidity_net_avg_pnl_pct > 0
+            ),
+            detail=(
+                f"Good-liquidity NET expectancy: "
+                f"{good_liquidity_closed_trade_count}/100 closed trades, "
+                f"avg NET P&L {good_liquidity_net_avg_pnl_pct:+.2f}% "
+                f"({'PASS' if good_liquidity_closed_trade_count >= 100 and good_liquidity_net_avg_pnl_pct > 0 else 'FAIL — need 100+ Good-liquidity trades with positive NET expectancy'})."
             ),
         ),
     ]
@@ -177,6 +195,7 @@ def format_go_live_telegram_message(
         "positive_avg_pnl": "Positive avg P&amp;L",
         "telegram_send_rate": "Telegram ≥90%",
         "risk_manager_active": "Risk manager active",
+        "good_liquidity_net_expectancy": "100 Good-liq trades, NET+",
     }
 
     trend_delta = win_rate_this_week - win_rate_last_week
@@ -297,8 +316,15 @@ class BinanceExecutor:
         self,
         symbol: str,
         quantity: float,
+        price: float | None = None,
+        metadata: dict | None = None,
     ) -> dict:
-        """Place a spot market buy order (or log it when disabled)."""
+        """Place a spot market buy order (or log it when disabled).
+
+        `price` is the real order-book price at decision time, used only for
+        shadow-mode comparison against the paper-trade fill — it is never sent
+        to the exchange for a market order.
+        """
         if self._live and self._client is not None:
             result = self._client.order_market_buy(symbol=symbol, quantity=quantity)
             logger.info("Live market buy placed: %s × %.6f → %s", symbol, quantity, result)
@@ -309,7 +335,7 @@ class BinanceExecutor:
             symbol,
             quantity,
         )
-        shadow = _log_shadow_trade("market_buy", symbol, quantity, price=None)
+        shadow = _log_shadow_trade("market_buy", symbol, quantity, price, metadata)
 
         if self._shadow:
             persist_shadow_trade(shadow)
@@ -320,8 +346,15 @@ class BinanceExecutor:
         self,
         symbol: str,
         quantity: float,
+        price: float | None = None,
+        metadata: dict | None = None,
     ) -> dict:
-        """Place a spot market sell order (or log it when disabled)."""
+        """Place a spot market sell order (or log it when disabled).
+
+        `price` is the real order-book price at decision time, used only for
+        shadow-mode comparison against the paper-trade fill — it is never sent
+        to the exchange for a market order.
+        """
         if self._live and self._client is not None:
             result = self._client.order_market_sell(symbol=symbol, quantity=quantity)
             logger.info("Live market sell placed: %s × %.6f → %s", symbol, quantity, result)
@@ -332,7 +365,7 @@ class BinanceExecutor:
             symbol,
             quantity,
         )
-        shadow = _log_shadow_trade("market_sell", symbol, quantity, price=None)
+        shadow = _log_shadow_trade("market_sell", symbol, quantity, price, metadata)
 
         if self._shadow:
             persist_shadow_trade(shadow)

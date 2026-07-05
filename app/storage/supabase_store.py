@@ -183,6 +183,10 @@ def _ensure_tables(connection) -> None:
                 'ALTER TABLE alert_history ADD COLUMN IF NOT EXISTS '
                 'paper_trade_skip_reason TEXT'
             ),
+            (
+                'ALTER TABLE alert_history ADD COLUMN IF NOT EXISTS '
+                'tradability_score INTEGER'
+            ),
         ):
             cursor.execute(statement)
         cursor.execute(
@@ -288,6 +292,10 @@ def _ensure_tables(connection) -> None:
             'ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS partial_tp1_price NUMERIC',
             'ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS partial_tp2_price NUMERIC',
             'ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS blended_pnl_pct NUMERIC',
+            'ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS tradability_score INTEGER',
+            'ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS gross_pnl_pct NUMERIC',
+            'ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS net_pnl_pct NUMERIC',
+            'ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS net_pnl_amount NUMERIC',
         ):
             cursor.execute(statement)
         cursor.execute(
@@ -816,14 +824,15 @@ def insert_alert_history(record: dict) -> None:
                         telegram_error,
                         paper_trade_created,
                         paper_trade_id,
-                        paper_trade_skip_reason
+                        paper_trade_skip_reason,
+                        tradability_score
                     )
                     VALUES (
                         %s, %s, %s, %s, %s, %s, %s, %s,
                         %s, %s, %s, %s, %s, %s, %s, %s,
                         %s, %s, %s, %s, %s, %s, %s, %s,
                         %s, %s, %s, %s, %s, %s, %s, %s,
-                        %s, %s, %s, %s, %s
+                        %s, %s, %s, %s, %s, %s
                     )
                     ON CONFLICT (id) DO NOTHING
                     """,
@@ -865,6 +874,7 @@ def insert_alert_history(record: dict) -> None:
                         bool(record.get("paper_trade_created")),
                         record.get("paper_trade_id"),
                         record.get("paper_trade_skip_reason"),
+                        record.get("tradability_score"),
                     ),
                 )
     finally:
@@ -922,6 +932,7 @@ def load_alert_history(limit: int | None = None) -> list[dict]:
                             paper_trade_created,
                             paper_trade_id,
                             paper_trade_skip_reason,
+                            tradability_score,
                             created_at
                         FROM alert_history
                         ORDER BY alerted_at ASC, id ASC
@@ -968,6 +979,7 @@ def load_alert_history(limit: int | None = None) -> list[dict]:
                             paper_trade_created,
                             paper_trade_id,
                             paper_trade_skip_reason,
+                            tradability_score,
                             created_at
                         FROM alert_history
                         ORDER BY alerted_at ASC, id ASC
@@ -1039,6 +1051,7 @@ def load_unchecked_alert_history(limit: int | None = None) -> list[dict]:
                             ah.paper_trade_created,
                             ah.paper_trade_id,
                             ah.paper_trade_skip_reason,
+                            ah.tradability_score,
                             ah.created_at
                         FROM alert_history ah
                         LEFT JOIN alert_outcomes ao ON ao.alert_id = ah.id
@@ -1091,6 +1104,7 @@ def load_unchecked_alert_history(limit: int | None = None) -> list[dict]:
                             ah.paper_trade_created,
                             ah.paper_trade_id,
                             ah.paper_trade_skip_reason,
+                            ah.tradability_score,
                             ah.created_at
                         FROM alert_history ah
                         LEFT JOIN alert_outcomes ao ON ao.alert_id = ah.id
@@ -1639,13 +1653,17 @@ def insert_paper_trade(record: dict) -> None:
                         simulated_position_size,
                         exit_reason,
                         pnl_pct,
-                        pnl_amount
+                        pnl_amount,
+                        tradability_score,
+                        gross_pnl_pct,
+                        net_pnl_pct,
+                        net_pnl_amount
                     )
                     VALUES (
                         %s, %s, %s, %s, %s, %s, %s, %s, %s,
                         %s, %s, %s, %s, %s, %s, %s, %s, %s,
                         %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                        %s, %s, %s, %s
+                        %s, %s, %s, %s, %s, %s, %s, %s
                     )
                     ON CONFLICT (id) DO NOTHING
                     """,
@@ -1681,6 +1699,10 @@ def insert_paper_trade(record: dict) -> None:
                         record.get("exit_reason"),
                         record.get("pnl_pct"),
                         record.get("pnl_amount"),
+                        record.get("tradability_score"),
+                        record.get("gross_pnl_pct"),
+                        record.get("net_pnl_pct"),
+                        record.get("net_pnl_amount"),
                     ),
                 )
     finally:
@@ -1728,6 +1750,10 @@ def get_open_paper_trades() -> list[dict]:
                         pnl_pct,
                         pnl_amount,
                         exit_reason,
+                        tradability_score,
+                        gross_pnl_pct,
+                        net_pnl_pct,
+                        net_pnl_amount,
                         created_at,
                         updated_at
                     FROM paper_trades
@@ -1813,6 +1839,10 @@ def update_paper_trade(trade_id: str, updates: dict) -> None:
         "partial_tp1_price": "partial_tp1_price",
         "partial_tp2_price": "partial_tp2_price",
         "blended_pnl_pct": "blended_pnl_pct",
+        "tradability_score": "tradability_score",
+        "gross_pnl_pct": "gross_pnl_pct",
+        "net_pnl_pct": "net_pnl_pct",
+        "net_pnl_amount": "net_pnl_amount",
     }
     set_clauses = []
     values = []
@@ -1926,6 +1956,10 @@ def load_paper_trades(limit: int | None = None) -> list[dict]:
                             pnl_pct,
                             pnl_amount,
                             exit_reason,
+                            tradability_score,
+                            gross_pnl_pct,
+                            net_pnl_pct,
+                            net_pnl_amount,
                             created_at,
                             updated_at
                         FROM paper_trades
@@ -1967,6 +2001,10 @@ def load_paper_trades(limit: int | None = None) -> list[dict]:
                             pnl_pct,
                             pnl_amount,
                             exit_reason,
+                            tradability_score,
+                            gross_pnl_pct,
+                            net_pnl_pct,
+                            net_pnl_amount,
                             created_at,
                             updated_at
                         FROM paper_trades
@@ -2025,6 +2063,7 @@ def _alert_history_row_to_record(row: dict) -> dict:
         "paper_trade_created": bool(row.get("paper_trade_created")),
         "paper_trade_id": row.get("paper_trade_id"),
         "paper_trade_skip_reason": row.get("paper_trade_skip_reason"),
+        "tradability_score": row.get("tradability_score"),
         "created_at": _to_iso(row.get("created_at")),
     }
 
@@ -2100,6 +2139,10 @@ def _paper_trade_row_to_record(row: dict) -> dict:
         "pnl_pct": _to_plain_number(row.get("pnl_pct")),
         "pnl_amount": _to_plain_number(row.get("pnl_amount")),
         "exit_reason": row.get("exit_reason"),
+        "tradability_score": row.get("tradability_score"),
+        "gross_pnl_pct": _to_plain_number(row.get("gross_pnl_pct")),
+        "net_pnl_pct": _to_plain_number(row.get("net_pnl_pct")),
+        "net_pnl_amount": _to_plain_number(row.get("net_pnl_amount")),
         "created_at": _to_iso(row.get("created_at")),
         "updated_at": _to_iso(row.get("updated_at")),
     }

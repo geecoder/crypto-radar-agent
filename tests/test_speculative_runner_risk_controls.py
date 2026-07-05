@@ -113,7 +113,10 @@ def test_speculative_runner_accepted_when_all_tightened_rules_pass() -> None:
 def test_open_alert_type_concentration_limit_blocks_new_speculative_trade(
     monkeypatch,
 ) -> None:
-    candidate = _speculative_runner_result()
+    candidate = _speculative_runner_result(
+        liquidity_signal={"label": "Good"},
+        tradability_signal={"score": 70},
+    )
     open_trades = [
         {
             "id": f"paper-open-{index}",

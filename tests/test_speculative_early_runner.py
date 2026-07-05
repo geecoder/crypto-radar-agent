@@ -151,7 +151,15 @@ def test_speculative_paper_trade_created_only_when_plan_allows(
     trades_file = tmp_path / "paper_trades.json"
     events_file = tmp_path / "paper_trade_events.json"
     eligible = _speculative_alert()
+    # Speculative early runners are normally caught on thin-liquidity coins, but
+    # the PAPER_MIN_LIQUIDITY hard floor (Block A) blocks trade creation below
+    # Good liquidity regardless of strategy — override so this test exercises
+    # the speculative-runner trade-plan gating, not the liquidity floor.
+    eligible["liquidity_signal"] = _liquidity(label="Good", score=60)
+    eligible["tradability_signal"] = {"score": 70}
     rejected = _speculative_alert()
+    rejected["liquidity_signal"] = _liquidity(label="Good", score=60)
+    rejected["tradability_signal"] = {"score": 70}
     rejected["volume_acceleration"] = _volume_acceleration(ratio_1h=1.5, ratio_2h=1.5)
     rejected["trade_plan"] = generate_trade_plan(rejected)
 

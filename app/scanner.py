@@ -18,6 +18,7 @@ from app.indicators.trend import calculate_trend_alignment
 from app.indicators.volatility import calculate_volatility_potential
 from app.indicators.volume import calculate_volume_spike
 from app.scoring.opportunity_score import calculate_opportunity_score
+from app.scoring.tradability_score import calculate_tradability_score
 from app.trading.trade_plan import generate_trade_plan
 
 SCAN_DELAY_SECONDS = 0.1
@@ -67,6 +68,10 @@ def scan_symbol(
         move_stage_signal = calculate_move_stage(candles)
         exhaustion_signal = calculate_exhaustion_risk(candles)
         liquidity_signal = calculate_liquidity_quality(ticker_24hr or {})
+        tradability_signal = calculate_tradability_score(
+            ticker_24hr or {},
+            liquidity_signal,
+        )
         recent_price_changes = calculate_recent_price_changes(candles)
         volume_acceleration = calculate_volume_acceleration(candles)
         opportunity = calculate_opportunity_score(
@@ -112,6 +117,7 @@ def scan_symbol(
             "move_stage_signal": move_stage_signal,
             "exhaustion_signal": exhaustion_signal,
             "liquidity_signal": liquidity_signal,
+            "tradability_signal": tradability_signal,
             "recent_price_changes": recent_price_changes,
             "volume_acceleration": volume_acceleration,
             "explosive_mover": explosive_mover,

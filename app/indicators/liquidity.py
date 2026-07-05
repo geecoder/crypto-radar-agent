@@ -1,5 +1,23 @@
 """Liquidity-quality signal indicators."""
 
+LIQUIDITY_RANK = {
+    "very thin": 0,
+    "thin": 1,
+    "good": 2,
+    "strong": 3,
+    "excellent": 4,
+}
+
+
+def liquidity_rank(label) -> int:
+    """Return the ordinal rank of a liquidity label, or -1 when unknown."""
+    return LIQUIDITY_RANK.get(str(label or "").strip().lower(), -1)
+
+
+def meets_liquidity_floor(label, minimum_label: str) -> bool:
+    """Return whether a liquidity label is at or above a minimum liquidity floor."""
+    return liquidity_rank(label) >= liquidity_rank(minimum_label)
+
 
 def calculate_liquidity_quality(ticker_24hr: dict) -> dict:
     """Score market liquidity from Binance 24-hour ticker data."""

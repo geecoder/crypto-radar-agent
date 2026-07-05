@@ -73,6 +73,37 @@ from app.trading.strategy_config import get_strategy_by_name
 
 TELEGRAM_TEST_MESSAGE = "✅ Crypto Radar Agent Telegram test message."
 ALERT_THRESHOLD = 60
+GOOD_LIQUIDITY_LABELS = {"good", "strong", "excellent"}
+
+
+def _net_pnl(trade: dict) -> float:
+    """Return a trade's NET P&L (fees + slippage subtracted), falling back to
+    gross pnl_pct for trades closed before Block B added net_pnl_pct."""
+    net = trade.get("net_pnl_pct")
+
+    if net is None:
+        net = trade.get("pnl_pct")
+
+    try:
+        return float(net or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _is_good_liquidity(trade: dict) -> bool:
+    """Return whether a trade's liquidity_label is Good or better."""
+    return str(trade.get("liquidity_label") or "").strip().lower() in GOOD_LIQUIDITY_LABELS
+
+
+def _good_liquidity_expectancy(closed_trades: list[dict]) -> tuple[int, float]:
+    """Return (count, avg NET pnl_pct) for closed Good-liquidity-or-better trades."""
+    good_liquidity_trades = [t for t in closed_trades if _is_good_liquidity(t)]
+
+    if not good_liquidity_trades:
+        return 0, 0.0
+
+    avg_net = sum(_net_pnl(t) for t in good_liquidity_trades) / len(good_liquidity_trades)
+    return len(good_liquidity_trades), avg_net
 
 
 def parse_args() -> argparse.Namespace:
@@ -234,13 +265,14 @@ def _run_go_live_check() -> None:
     closed = [t for t in paper_trades if t.get("status") == "closed"]
     last_100 = closed[-100:] if len(closed) >= 100 else closed
 
-    wins = sum(1 for t in last_100 if (t.get("pnl_pct") or 0) > 0)
+    wins = sum(1 for t in last_100 if _net_pnl(t) > 0)
     win_rate = (wins / len(last_100) * 100) if last_100 else 0.0
     avg_pnl = (
-        sum(float(t.get("pnl_pct") or 0) for t in last_100) / len(last_100)
+        sum(_net_pnl(t) for t in last_100) / len(last_100)
         if last_100
         else 0.0
     )
+    good_liquidity_count, good_liquidity_net_avg = _good_liquidity_expectancy(closed)
 
     alert_history = load_alert_history(limit=None)
     from datetime import timedelta
@@ -258,6 +290,8 @@ def _run_go_live_check() -> None:
         avg_pnl_last_100=avg_pnl,
         telegram_send_rate_7d=tg_rate,
         risk_manager_active=True,
+        good_liquidity_closed_trade_count=good_liquidity_count,
+        good_liquidity_net_avg_pnl_pct=good_liquidity_net_avg,
     )
     print(format_go_live_report(gates))
 
@@ -276,14 +310,15 @@ def _run_go_live_report() -> None:
     paper_trades = load_all_paper_trades()
     closed = [t for t in paper_trades if t.get("status") == "closed"]
 
-    # Win rate over last 100 closed trades.
+    # Win rate over last 100 closed trades (NET of fees/slippage).
     last_100 = closed[-100:] if len(closed) >= 100 else closed
-    wins_100 = sum(1 for t in last_100 if (t.get("pnl_pct") or 0) > 0)
+    wins_100 = sum(1 for t in last_100 if _net_pnl(t) > 0)
     win_rate_100 = (wins_100 / len(last_100) * 100) if last_100 else 0.0
     avg_pnl_100 = (
-        sum(float(t.get("pnl_pct") or 0) for t in last_100) / len(last_100)
+        sum(_net_pnl(t) for t in last_100) / len(last_100)
         if last_100 else 0.0
     )
+    good_liquidity_count, good_liquidity_net_avg = _good_liquidity_expectancy(closed)
 
     # Win rate this week vs last week.
     now = datetime.now(timezone.utc)
@@ -302,7 +337,7 @@ def _run_go_live_report() -> None:
     def _wr(trades: list[dict]) -> float:
         if not trades:
             return 0.0
-        return sum(1 for t in trades if (t.get("pnl_pct") or 0) > 0) / len(trades) * 100
+        return sum(1 for t in trades if _net_pnl(t) > 0) / len(trades) * 100
 
     win_rate_this_week = _wr(this_week)
     win_rate_last_week = _wr(last_week_trades)
@@ -340,6 +375,8 @@ def _run_go_live_report() -> None:
         avg_pnl_last_100=avg_pnl_100,
         telegram_send_rate_7d=tg_rate,
         risk_manager_active=True,
+        good_liquidity_closed_trade_count=good_liquidity_count,
+        good_liquidity_net_avg_pnl_pct=good_liquidity_net_avg,
     )
 
     message = format_go_live_telegram_message(
