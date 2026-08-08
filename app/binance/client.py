@@ -117,6 +117,18 @@ class BinancePublicClient:
         """Return 24-hour ticker statistics for one Spot symbol."""
         return self._get("/api/v3/ticker/24hr", params={"symbol": symbol})
 
+    def get_order_book(self, symbol: str, limit: int = 100) -> dict[str, Any]:
+        """Return current order-book depth (bids/asks) for one Spot symbol.
+
+        `limit` must be one of Binance's supported depth sizes (5, 10, 20, 50,
+        100, 500, 1000, 5000). Bids and asks are returned best-price-first as
+        ``[price, quantity]`` string pairs.
+        """
+        return self._get(
+            "/api/v3/depth",
+            params={"symbol": symbol, "limit": limit},
+        )
+
     def get_klines(
         self,
         symbol: str,

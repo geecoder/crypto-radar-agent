@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
+from app.binance.client import BinancePublicClient
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -273,6 +274,72 @@ def persist_shadow_trade(shadow_trade: dict) -> None:
         logger.warning("Failed to persist shadow trade: %s", exc)
 
 
+def walk_order_book(levels: list, quantity: float) -> float | None:
+    """Walk best-price-first order-book `levels` and return the VWAP fill price.
+
+    `levels` is a list of ``[price, quantity]`` pairs, as returned by
+    Binance's ``/api/v3/depth`` (asks for a buy, bids for a sell). Returns
+    None if `quantity` is non-positive or the book doesn't have enough
+    depth to fill it.
+    """
+    if quantity <= 0:
+        return None
+
+    remaining = quantity
+    cost = 0.0
+
+    for level_price, level_quantity in levels:
+        take = min(remaining, float(level_quantity))
+        cost += take * float(level_price)
+        remaining -= take
+
+        if remaining <= 0:
+            break
+
+    if remaining > 0:
+        return None
+
+    return cost / quantity
+
+
+def _order_book_spread_pct(bids: list, asks: list) -> float | None:
+    """Return the best bid/ask spread as a percentage of the best ask."""
+    if not bids or not asks:
+        return None
+
+    best_bid = float(bids[0][0])
+    best_ask = float(asks[0][0])
+
+    if best_ask <= 0:
+        return None
+
+    return max(0.0, (best_ask - best_bid) / best_ask * 100)
+
+
+def fetch_real_fill(symbol: str, side: str, quantity: float) -> tuple[float | None, float | None]:
+    """Fetch the live order book and compute the VWAP fill price for `quantity`.
+
+    `side` is "buy" (walks asks) or "sell" (walks bids) — the side of the
+    book a real market order of that type would actually consume. Returns
+    ``(real_fill_price, spread_pct)``; either may be None if the book
+    couldn't be fetched or lacked enough depth to fill `quantity`.
+    """
+    try:
+        book = BinancePublicClient().get_order_book(symbol)
+    except Exception as exc:
+        logger.warning("Failed to fetch order book for %s: %s", symbol, exc)
+        return None, None
+
+    bids = book.get("bids") or []
+    asks = book.get("asks") or []
+    levels = asks if side == "buy" else bids
+
+    real_fill_price = walk_order_book(levels, quantity)
+    spread_pct = _order_book_spread_pct(bids, asks)
+
+    return real_fill_price, spread_pct
+
+
 # ---------------------------------------------------------------------------
 # Binance executor
 # ---------------------------------------------------------------------------
@@ -321,9 +388,10 @@ class BinanceExecutor:
     ) -> dict:
         """Place a spot market buy order (or log it when disabled).
 
-        `price` is the real order-book price at decision time, used only for
-        shadow-mode comparison against the paper-trade fill — it is never sent
-        to the exchange for a market order.
+        `price` is the signal price at decision time. In shadow mode this is
+        never what gets logged as the trade price — the live order book is
+        walked for `quantity` to compute the real VWAP fill, which is what a
+        market order would actually have achieved.
         """
         if self._live and self._client is not None:
             result = self._client.order_market_buy(symbol=symbol, quantity=quantity)
@@ -335,11 +403,12 @@ class BinanceExecutor:
             symbol,
             quantity,
         )
-        shadow = _log_shadow_trade("market_buy", symbol, quantity, price, metadata)
 
-        if self._shadow:
-            persist_shadow_trade(shadow)
+        if not self._shadow:
+            return _log_shadow_trade("market_buy", symbol, quantity, price, metadata)
 
+        shadow = self._build_shadow_trade("market_buy", "buy", symbol, quantity, price, metadata)
+        persist_shadow_trade(shadow)
         return shadow
 
     def place_market_sell(
@@ -351,9 +420,10 @@ class BinanceExecutor:
     ) -> dict:
         """Place a spot market sell order (or log it when disabled).
 
-        `price` is the real order-book price at decision time, used only for
-        shadow-mode comparison against the paper-trade fill — it is never sent
-        to the exchange for a market order.
+        `price` is the signal price at decision time. In shadow mode this is
+        never what gets logged as the trade price — the live order book is
+        walked for `quantity` to compute the real VWAP fill, which is what a
+        market order would actually have achieved.
         """
         if self._live and self._client is not None:
             result = self._client.order_market_sell(symbol=symbol, quantity=quantity)
@@ -365,12 +435,37 @@ class BinanceExecutor:
             symbol,
             quantity,
         )
-        shadow = _log_shadow_trade("market_sell", symbol, quantity, price, metadata)
 
-        if self._shadow:
-            persist_shadow_trade(shadow)
+        if not self._shadow:
+            return _log_shadow_trade("market_sell", symbol, quantity, price, metadata)
 
+        shadow = self._build_shadow_trade("market_sell", "sell", symbol, quantity, price, metadata)
+        persist_shadow_trade(shadow)
         return shadow
+
+    def _build_shadow_trade(
+        self,
+        action: str,
+        side: str,
+        symbol: str,
+        quantity: float,
+        signal_price: float | None,
+        metadata: dict | None,
+    ) -> dict:
+        """Build a shadow trade record priced from a real, walked order book.
+
+        Falls back to the signal price if the book can't be fetched or
+        lacks enough depth, so a persistence failure never blocks logging.
+        """
+        real_fill_price, spread_pct = fetch_real_fill(symbol, side, quantity)
+        logged_price = real_fill_price if real_fill_price is not None else signal_price
+
+        shadow_metadata = dict(metadata or {})
+        shadow_metadata["signal_price"] = signal_price
+        shadow_metadata["real_fill_price"] = real_fill_price
+        shadow_metadata["order_book_spread_pct"] = spread_pct
+
+        return _log_shadow_trade(action, symbol, quantity, logged_price, shadow_metadata)
 
     def get_account_balance(self, asset: str = "USDT") -> float:
         """Return free balance for `asset`. Returns 0.0 when live trading disabled."""
