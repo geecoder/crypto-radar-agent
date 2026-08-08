@@ -111,6 +111,72 @@ def _good_liquidity_expectancy(closed_trades: list[dict]) -> tuple[int, float]:
     return len(good_liquidity_trades), avg_net
 
 
+# Ordered (first match wins) so a reason mentioning multiple things buckets
+# under its most specific cause first.
+_SKIP_REASON_BUCKETS = (
+    ("slippage", "Slippage budget exceeded"),
+    ("cannot confirm tradability", "Order book unavailable"),
+    ("move from recent low", "Move-window mismatch"),
+    ("24h change is below", "24h change too low"),
+    ("exhaustion risk is high", "Exhaustion risk High"),
+    ("re-acceleration", "No re-acceleration trigger"),
+    ("cooldown", "Cooldown suppression"),
+    ("duplicate open", "Duplicate open trade"),
+    ("opportunity score", "Opportunity score floor"),
+    ("open trade limit", "Concentration limit"),
+    ("risk gate blocked", "Risk gate blocked"),
+)
+
+
+def _bucket_skip_reason(reason: str) -> str:
+    """Map a paper_trade_skip_reason string to a short report bucket label."""
+    normalized = reason.strip().lower()
+
+    if not normalized:
+        return "Not evaluated"
+
+    for needle, label in _SKIP_REASON_BUCKETS:
+        if needle in normalized:
+            return label
+
+    return "Other"
+
+
+def _movers_over_20pct_this_week(alert_history: list[dict], week_cutoff: str) -> dict:
+    """Return alerts on >=20% movers this week, split traded vs missed (+ why).
+
+    `alert_history.paper_trade_skip_reason` already records why each missed
+    alert didn't become a trade — no re-evaluation needed, just bucketing.
+    """
+    movers = [
+        a for a in alert_history
+        if str(a.get("alerted_at") or "") >= week_cutoff
+        and _safe_float(a.get("move_from_recent_low_pct")) >= 20
+    ]
+    traded = [a for a in movers if a.get("paper_trade_created")]
+    missed = [a for a in movers if not a.get("paper_trade_created")]
+
+    missed_reason_counts: dict[str, int] = {}
+    for alert in missed:
+        bucket = _bucket_skip_reason(str(alert.get("paper_trade_skip_reason") or ""))
+        missed_reason_counts[bucket] = missed_reason_counts.get(bucket, 0) + 1
+
+    return {
+        "total": len(movers),
+        "traded": len(traded),
+        "missed": len(missed),
+        "missed_reason_counts": missed_reason_counts,
+    }
+
+
+def _safe_float(value, default: float = 0.0) -> float:
+    """Convert a value to float, returning default on failure."""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def parse_args() -> argparse.Namespace:
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(description="Run the Crypto Radar Agent.")
@@ -230,7 +296,7 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help=(
             "Paper trading strategy for newly created simulated trades "
-            "(default, conservative, aggressive, parabolic, speculative)."
+            "(default, conservative, aggressive, parabolic)."
         ),
     )
     return parser.parse_args()
@@ -382,6 +448,8 @@ def _run_go_live_report() -> None:
     sent_recent = sum(1 for a in recent_alerts if a.get("telegram_sent"))
     tg_rate = (sent_recent / total_recent * 100) if total_recent else 0.0
 
+    movers_over_20pct = _movers_over_20pct_this_week(alert_history, week_cutoff)
+
     gates = check_go_live_preconditions(
         closed_paper_trade_count=len(closed),
         win_rate_last_100=win_rate_100,
@@ -400,6 +468,7 @@ def _run_go_live_report() -> None:
         post_block3_closed=len(post_block3),
         exit_breakdown_this_week=breakdown,
         total_closed=len(closed),
+        movers_over_20pct=movers_over_20pct,
     )
 
     print(message)

@@ -169,6 +169,29 @@ def _verdict(
     return "Making progress — keep running paper trades."
 
 
+def _format_movers_section(movers_over_20pct: dict) -> list[str]:
+    """Format the "movers >20% this week" section as Telegram HTML lines."""
+    total = movers_over_20pct.get("total", 0)
+    traded = movers_over_20pct.get("traded", 0)
+    missed = movers_over_20pct.get("missed", 0)
+    missed_reason_counts = movers_over_20pct.get("missed_reason_counts") or {}
+
+    lines = [
+        "",
+        f"<b>Movers &gt;20% this week</b> ({total} alerts):",
+        f"  Traded: <b>{traded}</b>   Missed: <b>{missed}</b>",
+    ]
+
+    if missed_reason_counts:
+        lines.append("  Missed because:")
+        for reason, count in sorted(
+            missed_reason_counts.items(), key=lambda item: -item[1]
+        ):
+            lines.append(f"    {reason}: {count}")
+
+    return lines
+
+
 def format_go_live_telegram_message(
     gates: list[GoLiveGate],
     win_rate_last_100: float,
@@ -177,6 +200,7 @@ def format_go_live_telegram_message(
     post_block3_closed: int,
     exit_breakdown_this_week: dict[str, int],
     total_closed: int,
+    movers_over_20pct: dict | None = None,
 ) -> str:
     """Format the weekly go-live readiness report as Telegram HTML.
 
@@ -188,6 +212,9 @@ def format_go_live_telegram_message(
         post_block3_closed: closed trades opened after Block 3 deploy (2026-06-18).
         exit_breakdown_this_week: dict with keys stop_loss, take_profit, max_hold_expired.
         total_closed: total closed paper trades all time.
+        movers_over_20pct: optional dict with keys total/traded/missed/
+            missed_reason_counts (see app/main.py:_movers_over_20pct_this_week).
+            Omitted from the message when None.
     """
     gate_icon = {True: "✅", False: "❌"}
     gate_labels = {
@@ -238,6 +265,12 @@ def format_go_live_telegram_message(
         f"  Stop-loss:        {sl:2d}  ({pct(sl)})",
         f"  Take-profit:      {tp:2d}  ({pct(tp)})",
         f"  Max-hold expired: {mh:2d}  ({pct(mh)})",
+    ]
+
+    if movers_over_20pct is not None:
+        lines += _format_movers_section(movers_over_20pct)
+
+    lines += [
         "",
         f"<b>Verdict:</b> {_verdict(gates, win_rate_this_week, win_rate_last_week)}",
     ]

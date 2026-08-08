@@ -1022,3 +1022,65 @@ def test_main_suppresses_alert_candidates_during_cooldown(monkeypatch, capsys) -
     assert alert_history_records == [("BTCUSDT", False)]
     assert "BTCUSDT: Duplicate alert suppressed during cooldown." in output
     assert "Alert candidates found, but all were suppressed by cooldown." in output
+
+
+def test_bucket_skip_reason_maps_known_reasons() -> None:
+    assert app_main._bucket_skip_reason(
+        "Walking the order book for $50 of BTCUSDT implies 3.00% slippage, over the 1.5% budget."
+    ) == "Slippage budget exceeded"
+    assert app_main._bucket_skip_reason(
+        "Move from recent low must be at least 50%."
+    ) == "Move-window mismatch"
+    assert app_main._bucket_skip_reason("Exhaustion risk is High.") == "Exhaustion risk High"
+    assert app_main._bucket_skip_reason(
+        "Duplicate open paper trade exists for HEIUSDT."
+    ) == "Duplicate open trade"
+    assert app_main._bucket_skip_reason("") == "Not evaluated"
+    assert app_main._bucket_skip_reason("Something unrecognized happened.") == "Other"
+
+
+def test_movers_over_20pct_this_week_splits_traded_and_missed() -> None:
+    week_cutoff = "2026-08-01T00:00:00+00:00"
+    alert_history = [
+        {
+            "symbol": "HEIUSDT",
+            "alerted_at": "2026-08-02T00:00:00+00:00",
+            "move_from_recent_low_pct": 52.0,
+            "paper_trade_created": True,
+        },
+        {
+            "symbol": "CTSIUSDT",
+            "alerted_at": "2026-08-03T00:00:00+00:00",
+            "move_from_recent_low_pct": 41.0,
+            "paper_trade_created": False,
+            "paper_trade_skip_reason": "Exhaustion risk is High.",
+        },
+        {
+            "symbol": "PONDUSDT",
+            "alerted_at": "2026-08-03T00:00:00+00:00",
+            "move_from_recent_low_pct": 25.0,
+            "paper_trade_created": False,
+            "paper_trade_skip_reason": "Exhaustion risk is High.",
+        },
+        {
+            # Below 20% — excluded entirely.
+            "symbol": "SMALLUSDT",
+            "alerted_at": "2026-08-03T00:00:00+00:00",
+            "move_from_recent_low_pct": 5.0,
+            "paper_trade_created": False,
+        },
+        {
+            # Before the week cutoff — excluded entirely.
+            "symbol": "OLDUSDT",
+            "alerted_at": "2026-07-20T00:00:00+00:00",
+            "move_from_recent_low_pct": 30.0,
+            "paper_trade_created": False,
+        },
+    ]
+
+    result = app_main._movers_over_20pct_this_week(alert_history, week_cutoff)
+
+    assert result["total"] == 3
+    assert result["traded"] == 1
+    assert result["missed"] == 2
+    assert result["missed_reason_counts"] == {"Exhaustion risk High": 2}
