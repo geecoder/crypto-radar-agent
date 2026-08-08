@@ -46,16 +46,21 @@ NOT_TRADABLE_DIRECTIONS = {"short"}
 CATASTROPHIC_LOSS_PCT_OF_PORTFOLIO = 10.0
 
 
-def _net_pnl_pct(gross_pnl_pct: float) -> float:
-    """Conservative flat slippage estimate.
+def _net_pnl_pct(gross_pnl_pct: float, slippage_pct_override: float | None = None) -> float:
+    """Conservative flat slippage estimate, or a real measured spread when given.
 
     Unlike the momentum backtests, there's no `liquidity_label` to key off
     here — these signals come from raw historical scanning, not the
-    scanner's own ticker-based classification. Uses the same worst-tier
-    (DEFAULT_SLIPPAGE_PCT) estimate the momentum backtests fall back to
-    when liquidity is unknown, rather than assuming a favorable tier.
+    scanner's own ticker-based classification. Defaults to the same
+    worst-tier (DEFAULT_SLIPPAGE_PCT) estimate the momentum backtests fall
+    back to when liquidity is unknown. Callers with a real measured
+    order-book spread (e.g. the liquid-majors backtest) pass it via
+    `slippage_pct_override` instead of assuming the worst tier.
     """
-    return gross_pnl_pct - ROUND_TRIP_FEE_PCT - DEFAULT_SLIPPAGE_PCT
+    slippage_pct = (
+        slippage_pct_override if slippage_pct_override is not None else DEFAULT_SLIPPAGE_PCT
+    )
+    return gross_pnl_pct - ROUND_TRIP_FEE_PCT - slippage_pct
 
 
 def backtest_symbol(
@@ -65,11 +70,14 @@ def backtest_symbol(
     rsi_threshold: float,
     k_stop: float,
     max_hold_hours: int,
+    slippage_pct_override: float | None = None,
 ) -> list[dict]:
     """Backtest one symbol's full candle history for one grid combination.
 
     Scans chronologically; a new signal is only considered once any
     previously opened trade for this symbol has exited (no pyramiding).
+    `slippage_pct_override` lets callers substitute a real measured spread
+    (e.g. for liquid majors) instead of the flat worst-tier default.
     """
     if candles is None or len(candles) < ATR_PERIOD + BOLLINGER_PERIOD:
         return []
@@ -108,7 +116,7 @@ def backtest_symbol(
 
         stop_distance_pct = k_stop * atr / entry_price * 100
         position_size_usd = compute_position_size(-stop_distance_pct)
-        net_pnl_pct = _net_pnl_pct(close["gross_pnl_pct"])
+        net_pnl_pct = _net_pnl_pct(close["gross_pnl_pct"], slippage_pct_override)
 
         trades.append(
             {
