@@ -16,13 +16,22 @@ from app.trading.paper_trading import (
 
 @pytest.fixture(autouse=True)
 def _default_hard_gate_passes(monkeypatch):
-    """Most tests here aren't exercising the slippage gate — default it to pass
-    so they don't make a real Binance order-book request. Tests that need to
-    exercise the gate itself override this within the test."""
+    """Most tests here aren't exercising the slippage gate or conviction
+    sizing — default both to pass/fixed so they don't make a real Binance
+    order-book request. Tests that need to exercise them override within
+    the test (see monkeypatch.undo() usage below)."""
     monkeypatch.setattr(
         paper_trading,
         "_meets_hard_trade_gates",
         lambda result, position_size_usd: (True, "Slippage gate passed (stub)."),
+    )
+    monkeypatch.setattr(
+        paper_trading,
+        "compute_conviction_position_size",
+        lambda result, stop_loss_pct, opportunity_score, risk_config=None: (
+            50.0,
+            "Sized (stub).",
+        ),
     )
 
 
@@ -363,7 +372,9 @@ def test_create_paper_trades_allows_thin_liquidity_when_book_absorbs_size(
 ) -> None:
     """A Thin-liquidity coin with a real order book deep enough to absorb the
     position size within budget now trades — this is the HEIUSDT-style fix."""
-    monkeypatch.undo()  # restore the real _meets_hard_trade_gates from the autouse stub
+    # Restore the real compute_conviction_position_size and _meets_hard_trade_gates
+    # from the autouse stubs so this test exercises the actual gating logic.
+    monkeypatch.undo()
     trades_file = tmp_path / "paper_trades.json"
     events_file = tmp_path / "paper_trade_events.json"
     alert = _eligible_alert()
@@ -374,6 +385,16 @@ def test_create_paper_trades_allows_thin_liquidity_when_book_absorbs_size(
     monkeypatch.setattr(paper_trading, "PAPER_TRADE_EVENTS_FILE", str(events_file))
     monkeypatch.setattr(
         paper_trading, "fetch_real_fill", lambda symbol, side, quantity: (100.2, 0.1)
+    )
+    monkeypatch.setattr(
+        paper_trading,
+        "evaluate_entry_slippage",
+        lambda symbol, base_quantity, signal_price, budget_pct: {
+            "real_fill_price": 100.2,
+            "adverse_slippage_pct": 0.2,
+            "spread_pct": 0.1,
+            "max_quantity_within_budget": 1000.0,
+        },
     )
 
     decisions = paper_trading.create_paper_trades_from_alerts([alert])
@@ -634,3 +655,102 @@ def test_apply_real_slippage_if_available_noop_when_no_real_data(monkeypatch) ->
     )
 
     assert updated == []
+
+
+def _stub_entry_slippage(adverse_slippage_pct, max_quantity_within_budget):
+    return lambda symbol, base_quantity, signal_price, budget_pct: {
+        "real_fill_price": signal_price,
+        "adverse_slippage_pct": adverse_slippage_pct,
+        "spread_pct": 0.05,
+        "max_quantity_within_budget": max_quantity_within_budget,
+    }
+
+
+def test_compute_conviction_position_size_high_conviction_uses_max_multiplier(
+    monkeypatch,
+) -> None:
+    monkeypatch.undo()  # restore real compute_conviction_position_size from autouse stub
+    # RiskConfig defaults: $1000 portfolio x 1% risk / 10% stop = $100 base size.
+    monkeypatch.setattr(
+        paper_trading,
+        "evaluate_entry_slippage",
+        _stub_entry_slippage(adverse_slippage_pct=0.0, max_quantity_within_budget=1000.0),
+    )
+
+    size_usd, detail = paper_trading.compute_conviction_position_size(
+        {"symbol": "BTCUSDT", "latest_close": 100.0}, -10, opportunity_score=100
+    )
+
+    # Full conviction (score=100, zero slippage) -> 1.5x multiplier.
+    assert size_usd == pytest.approx(150.0)
+    assert "1.50x" in detail
+
+
+def test_compute_conviction_position_size_low_conviction_uses_min_multiplier(
+    monkeypatch,
+) -> None:
+    monkeypatch.undo()  # restore real compute_conviction_position_size from autouse stub
+    monkeypatch.setattr(
+        paper_trading,
+        "evaluate_entry_slippage",
+        _stub_entry_slippage(
+            adverse_slippage_pct=paper_trading.PAPER_SLIPPAGE_BUDGET_PCT,
+            max_quantity_within_budget=1000.0,
+        ),
+    )
+
+    size_usd, detail = paper_trading.compute_conviction_position_size(
+        {"symbol": "BTCUSDT", "latest_close": 100.0}, -10, opportunity_score=0
+    )
+
+    # Zero conviction (score=0, at slippage budget) -> 0.5x multiplier.
+    assert size_usd == pytest.approx(50.0)
+    assert "0.50x" in detail
+
+
+def test_compute_conviction_position_size_capped_by_book_depth(monkeypatch) -> None:
+    monkeypatch.undo()  # restore real compute_conviction_position_size from autouse stub
+    monkeypatch.setattr(
+        paper_trading,
+        "evaluate_entry_slippage",
+        # Book can only absorb 0.3 units ($30 notional at $100/unit) even
+        # though conviction alone would justify the full $150.
+        _stub_entry_slippage(adverse_slippage_pct=0.0, max_quantity_within_budget=0.3),
+    )
+
+    size_usd, _detail = paper_trading.compute_conviction_position_size(
+        {"symbol": "BTCUSDT", "latest_close": 100.0}, -10, opportunity_score=100
+    )
+
+    assert size_usd == pytest.approx(30.0)
+
+
+def test_compute_conviction_position_size_none_when_book_unavailable(monkeypatch) -> None:
+    monkeypatch.undo()  # restore real compute_conviction_position_size from autouse stub
+    monkeypatch.setattr(
+        paper_trading,
+        "evaluate_entry_slippage",
+        lambda symbol, base_quantity, signal_price, budget_pct: {
+            "real_fill_price": None,
+            "adverse_slippage_pct": None,
+            "spread_pct": None,
+            "max_quantity_within_budget": 0.0,
+        },
+    )
+
+    size_usd, detail = paper_trading.compute_conviction_position_size(
+        {"symbol": "BTCUSDT", "latest_close": 100.0}, -10, opportunity_score=80
+    )
+
+    assert size_usd is None
+    assert "cannot confirm tradability" in detail.lower()
+
+
+def test_compute_conviction_position_size_none_when_signal_price_missing(monkeypatch) -> None:
+    monkeypatch.undo()  # restore real compute_conviction_position_size from autouse stub
+    size_usd, detail = paper_trading.compute_conviction_position_size(
+        {"symbol": "BTCUSDT"}, -10, opportunity_score=80
+    )
+
+    assert size_usd is None
+    assert "signal price" in detail.lower()

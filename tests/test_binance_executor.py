@@ -213,3 +213,60 @@ def test_place_market_sell_shadow_falls_back_to_signal_price_when_book_fetch_fai
     assert shadow["price"] == 95.0
     assert shadow["metadata"]["signal_price"] == 95.0
     assert shadow["metadata"]["real_fill_price"] is None
+
+
+def test_max_buy_quantity_within_budget_takes_partial_level() -> None:
+    # Budget 1% -> max_price = 101.0. 1 unit @ 100 fully fits; of the 5 units
+    # @ 102, only enough to hold the average at 101.0 should be taken:
+    # headroom = 101*1 - 100 = 1; denom = 102-101 = 1 -> extra = 1.0 unit.
+    levels = [["100.0", "1.0"], ["102.0", "5.0"], ["110.0", "10.0"]]
+
+    quantity = binance_executor.max_buy_quantity_within_budget(levels, 100.0, 1.0)
+
+    assert quantity == pytest.approx(2.0)
+
+
+def test_max_buy_quantity_within_budget_zero_when_best_ask_exceeds_budget() -> None:
+    levels = [["105.0", "10.0"]]
+
+    quantity = binance_executor.max_buy_quantity_within_budget(levels, 100.0, 1.0)
+
+    assert quantity == 0.0
+
+
+def test_max_buy_quantity_within_budget_returns_zero_for_invalid_signal_price() -> None:
+    assert binance_executor.max_buy_quantity_within_budget([["100.0", "1.0"]], 0, 1.0) == 0.0
+
+
+def test_evaluate_entry_slippage_returns_fill_and_capacity(monkeypatch) -> None:
+    book = {
+        "bids": [["99.0", "10.0"]],
+        "asks": [["100.0", "1.0"], ["102.0", "5.0"]],
+    }
+
+    class FakePublicClient:
+        def get_order_book(self, symbol):
+            return book
+
+    monkeypatch.setattr(binance_executor, "BinancePublicClient", FakePublicClient)
+
+    result = binance_executor.evaluate_entry_slippage("BTCUSDT", 1.0, 100.0, 1.0)
+
+    assert result["real_fill_price"] == 100.0
+    assert result["adverse_slippage_pct"] == 0.0
+    assert result["spread_pct"] == pytest.approx(1.0)
+    assert result["max_quantity_within_budget"] == pytest.approx(2.0)
+
+
+def test_evaluate_entry_slippage_handles_fetch_failure(monkeypatch) -> None:
+    class FakePublicClient:
+        def get_order_book(self, symbol):
+            raise RuntimeError("network down")
+
+    monkeypatch.setattr(binance_executor, "BinancePublicClient", FakePublicClient)
+
+    result = binance_executor.evaluate_entry_slippage("BTCUSDT", 1.0, 100.0, 1.0)
+
+    assert result["real_fill_price"] is None
+    assert result["adverse_slippage_pct"] is None
+    assert result["max_quantity_within_budget"] == 0.0

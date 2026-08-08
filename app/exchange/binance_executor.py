@@ -340,6 +340,100 @@ def fetch_real_fill(symbol: str, side: str, quantity: float) -> tuple[float | No
     return real_fill_price, spread_pct
 
 
+def max_buy_quantity_within_budget(
+    levels: list, signal_price: float, budget_pct: float
+) -> float:
+    """Return the largest buy quantity fillable within `budget_pct` slippage.
+
+    Walks best-price-first ask `levels`, accumulating quantity while the
+    running VWAP stays at or below ``signal_price * (1 + budget_pct/100)``.
+    When a level would push the average over that ceiling, takes only the
+    partial amount of that level needed to hold the average exactly at the
+    ceiling. Returns 0.0 if `signal_price` is invalid or the best ask alone
+    already exceeds the budget.
+    """
+    if signal_price <= 0:
+        return 0.0
+
+    max_price = signal_price * (1 + budget_pct / 100)
+    quantity = 0.0
+    cost = 0.0
+
+    for level_price, level_quantity in levels:
+        level_price = float(level_price)
+        level_quantity = float(level_quantity)
+
+        if level_price <= max_price:
+            quantity += level_quantity
+            cost += level_quantity * level_price
+            continue
+
+        headroom = max_price * quantity - cost
+        denom = level_price - max_price
+
+        if headroom > 0 and denom > 0:
+            quantity += headroom / denom
+
+        break
+
+    return quantity
+
+
+def evaluate_entry_slippage(
+    symbol: str,
+    base_quantity: float,
+    signal_price: float,
+    budget_pct: float,
+) -> dict:
+    """Fetch the live ask-side order book once for position-entry sizing.
+
+    One book fetch serves both the slippage measurement for `base_quantity`
+    and the largest quantity the book can absorb within `budget_pct` —
+    avoiding a second network round-trip for callers (like conviction-based
+    position sizing) that need both.
+
+    Returns a dict with:
+      - real_fill_price: VWAP fill for `base_quantity`, or None if the book
+        is unavailable or lacks enough depth to fill it
+      - adverse_slippage_pct: adverse slippage for `base_quantity` relative
+        to `signal_price` (0.0 if the fill is favorable), or None if
+        real_fill_price is None
+      - spread_pct: best bid/ask spread at the snapshot
+      - max_quantity_within_budget: largest quantity fillable within
+        `budget_pct` adverse slippage (0.0 if the book is unavailable)
+    """
+    try:
+        book = BinancePublicClient().get_order_book(symbol)
+    except Exception as exc:
+        logger.warning("Failed to fetch order book for %s: %s", symbol, exc)
+        return {
+            "real_fill_price": None,
+            "adverse_slippage_pct": None,
+            "spread_pct": None,
+            "max_quantity_within_budget": 0.0,
+        }
+
+    bids = book.get("bids") or []
+    asks = book.get("asks") or []
+
+    real_fill_price = walk_order_book(asks, base_quantity)
+    adverse_slippage_pct = None
+
+    if real_fill_price is not None and signal_price > 0:
+        adverse_slippage_pct = max(
+            0.0, (real_fill_price - signal_price) / signal_price * 100
+        )
+
+    return {
+        "real_fill_price": real_fill_price,
+        "adverse_slippage_pct": adverse_slippage_pct,
+        "spread_pct": _order_book_spread_pct(bids, asks),
+        "max_quantity_within_budget": max_buy_quantity_within_budget(
+            asks, signal_price, budget_pct
+        ),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Binance executor
 # ---------------------------------------------------------------------------

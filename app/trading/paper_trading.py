@@ -13,8 +13,12 @@ import pandas as pd
 
 from app.binance.client import klines_to_dataframe
 from app.config import PAPER_SLIPPAGE_BUDGET_PCT, USE_SUPABASE
-from app.exchange.binance_executor import BinanceExecutor, fetch_real_fill
-from app.risk.risk_manager import RiskConfig, evaluate_trade_risk
+from app.exchange.binance_executor import (
+    BinanceExecutor,
+    evaluate_entry_slippage,
+    fetch_real_fill,
+)
+from app.risk.risk_manager import RiskConfig, compute_position_size, evaluate_trade_risk
 from app.storage import supabase_store
 from app.trading.strategy_config import (
     PaperTradingStrategy,
@@ -64,6 +68,16 @@ MAX_OPEN_PAPER_TRADES_BY_ALERT_TYPE = {
     "Continuation Alert": 10,
 }
 MAX_TOTAL_OPEN_PAPER_TRADES = 20
+# Conviction-based position sizing: the risk-manager's per-trade risk formula
+# gives a base size, scaled by a [MIN, MAX] multiplier driven by how strong
+# the setup looks (opportunity_score) and how much slippage-budget headroom
+# the order book has (tradability_headroom). Opportunity is weighted higher
+# since it answers "is this a good setup"; tradability just confirms we can
+# actually execute it at the size the opportunity alone would justify.
+POSITION_SIZE_MIN_MULTIPLIER = 0.5
+POSITION_SIZE_MAX_MULTIPLIER = 1.5
+POSITION_SIZE_OPPORTUNITY_WEIGHT = 0.7
+POSITION_SIZE_TRADABILITY_WEIGHT = 0.3
 MAX_HOLD_EXPIRED_EVENT_NOTES = (
     "Closed stale paper trade because max_hold_hours was reached."
 )
@@ -73,8 +87,14 @@ logger = get_logger(__name__)
 def build_paper_trade_from_alert(
     result: dict,
     strategy: PaperTradingStrategy | None = None,
+    position_size_override: float | None = None,
 ) -> dict:
-    """Build a simulated long trade from one alert candidate."""
+    """Build a simulated long trade from one alert candidate.
+
+    `position_size_override` is the conviction/volatility-adjusted size from
+    `compute_conviction_position_size` — falls back to the strategy's fixed
+    `simulated_position_size` when not provided (manual/CLI callers, tests).
+    """
     strategy = strategy or get_default_paper_trading_strategy()
     opened_at = _utc_now_iso()
     symbol = str(result.get("symbol") or "UNKNOWN")
@@ -130,7 +150,11 @@ def build_paper_trade_from_alert(
                 _get_opportunity_value(result, "opportunity_score"), strategy
             ),
         ),
-        "simulated_position_size": strategy.simulated_position_size,
+        "simulated_position_size": (
+            position_size_override
+            if position_size_override is not None
+            else strategy.simulated_position_size
+        ),
         "peak_price": result.get("latest_close"),
         "trailing_stop_price": None,
         "partial_tp1_hit": False,
@@ -329,14 +353,28 @@ def create_paper_trades_from_alerts(
         else:
             eligible, reason = should_create_paper_trade(candidate, strategy)
 
+        position_size_usd = None
+
         if eligible:
-            hard_gate_ok, hard_gate_reason = _meets_hard_trade_gates(
-                candidate_for_trade, selected_strategy.simulated_position_size
+            stop_loss_pct = float(selected_strategy.stop_loss_pct or -10)
+            opportunity_score = _get_opportunity_value(
+                candidate_for_trade, "opportunity_score"
+            )
+            position_size_usd, size_reason = compute_conviction_position_size(
+                candidate_for_trade, stop_loss_pct, opportunity_score, risk_config
             )
 
-            if not hard_gate_ok:
+            if position_size_usd is None:
                 eligible = False
-                reason = hard_gate_reason
+                reason = size_reason
+            else:
+                hard_gate_ok, hard_gate_reason = _meets_hard_trade_gates(
+                    candidate_for_trade, position_size_usd
+                )
+
+                if not hard_gate_ok:
+                    eligible = False
+                    reason = hard_gate_reason
 
         symbol = str(candidate.get("symbol") or "UNKNOWN")
         trade_plan = _get_trade_plan(candidate_for_trade)
@@ -412,7 +450,11 @@ def create_paper_trades_from_alerts(
             decisions.append(decision)
             continue
 
-        trade = build_paper_trade_from_alert(candidate_for_trade, selected_strategy)
+        trade = build_paper_trade_from_alert(
+            candidate_for_trade,
+            selected_strategy,
+            position_size_override=position_size_usd,
+        )
         _insert_paper_trade(trade)
         _insert_paper_trade_event(_build_trade_event(trade, "opened"))
         _log_shadow_trade_open(trade)
@@ -1421,6 +1463,81 @@ def _meets_slippage_gate(result: dict, position_size_usd: float) -> tuple[bool, 
 def _meets_hard_trade_gates(result: dict, position_size_usd: float) -> tuple[bool, str]:
     """Non-negotiable gate applied to every alert type before any paper trade opens."""
     return _meets_slippage_gate(result, position_size_usd)
+
+
+def compute_conviction_position_size(
+    result: dict,
+    stop_loss_pct: float,
+    opportunity_score: float | None,
+    risk_config: RiskConfig | None = None,
+) -> tuple[float | None, str]:
+    """Size a position by conviction, capped by real order-book depth.
+
+    base_size comes from the risk manager's per-trade risk formula
+    (portfolio_value × risk_per_trade_pct / |stop_loss_pct|) — previously
+    computed but discarded. It's scaled by a 0.5x-1.5x multiplier driven by
+    opportunity_score and how much order-book slippage-budget headroom is
+    left at that size, then capped at whatever quantity the book can
+    actually absorb within PAPER_SLIPPAGE_BUDGET_PCT.
+
+    Returns (position_size_usd, detail). position_size_usd is None — same
+    fail-closed rule as the slippage gate — when the book can't be fetched
+    or can't absorb any size within budget.
+    """
+    entry_price = _safe_float(result.get("latest_close"), default=None)
+    symbol = str(result.get("symbol") or "")
+
+    if entry_price is None or entry_price <= 0:
+        return None, "Cannot size position: missing or invalid signal price."
+
+    base_size = compute_position_size(stop_loss_pct, risk_config)
+    base_quantity = base_size / entry_price
+    book_eval = evaluate_entry_slippage(
+        symbol, base_quantity, entry_price, PAPER_SLIPPAGE_BUDGET_PCT
+    )
+    adverse_slippage_pct = book_eval["adverse_slippage_pct"]
+
+    if adverse_slippage_pct is None:
+        return None, (
+            f"Order book for {symbol} is unavailable or lacks enough depth to "
+            f"price a ${base_size:.0f} position — cannot confirm tradability."
+        )
+
+    tradability_headroom = max(
+        0.0,
+        min(
+            1.0,
+            (PAPER_SLIPPAGE_BUDGET_PCT - adverse_slippage_pct) / PAPER_SLIPPAGE_BUDGET_PCT,
+        ),
+    )
+    normalized_score = max(
+        0.0, min(1.0, (_safe_float(opportunity_score, default=0.0) or 0.0) / 100)
+    )
+    conviction = (
+        normalized_score * POSITION_SIZE_OPPORTUNITY_WEIGHT
+        + tradability_headroom * POSITION_SIZE_TRADABILITY_WEIGHT
+    )
+    multiplier = POSITION_SIZE_MIN_MULTIPLIER + conviction * (
+        POSITION_SIZE_MAX_MULTIPLIER - POSITION_SIZE_MIN_MULTIPLIER
+    )
+    size_usd = base_size * multiplier
+
+    max_quantity = book_eval["max_quantity_within_budget"] or 0.0
+    max_notional = max_quantity * entry_price
+    size_usd = min(size_usd, max_notional) if max_notional > 0 else 0.0
+
+    if size_usd <= 0:
+        return None, (
+            f"Order book for {symbol} cannot absorb any position size within "
+            f"the {PAPER_SLIPPAGE_BUDGET_PCT:g}% slippage budget."
+        )
+
+    return (
+        round(size_usd, 2),
+        f"Sized ${size_usd:.2f} at {multiplier:.2f}x conviction "
+        f"(score {normalized_score * 100:.0f}, tradability headroom "
+        f"{tradability_headroom * 100:.0f}%), capped by book depth.",
+    )
 
 
 def _get_exhaustion_risk_level(result: dict) -> Any:

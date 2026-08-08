@@ -15,12 +15,21 @@ from app.trading.strategy_config import get_parabolic_paper_strategy
 
 @pytest.fixture(autouse=True)
 def _default_hard_gate_passes(monkeypatch):
-    """These tests exercise parabolic eligibility, not the slippage gate —
-    default it to pass so they don't make a real Binance order-book request."""
+    """These tests exercise parabolic eligibility, not the slippage gate or
+    conviction sizing — default both to pass/fixed so they don't make a real
+    Binance order-book request."""
     monkeypatch.setattr(
         paper_trading,
         "_meets_hard_trade_gates",
         lambda result, position_size_usd: (True, "Slippage gate passed (stub)."),
+    )
+    monkeypatch.setattr(
+        paper_trading,
+        "compute_conviction_position_size",
+        lambda result, stop_loss_pct, opportunity_score, risk_config=None: (
+            25.0,
+            "Sized (stub).",
+        ),
     )
 
 
