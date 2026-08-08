@@ -119,7 +119,7 @@ def classify_explosive_mover(
 
     if (
         move_pct > 10
-        and move_pct <= 30
+        and move_pct <= 20
         and (change_1h >= 5 or change_4h >= 12)
         and volume_score >= 60
         and liquidity_score >= 40
@@ -135,40 +135,6 @@ def classify_explosive_mover(
             reason=(
                 "Active breakout conditions are present with accelerated "
                 "volume, supportive trend, and elevated volatility."
-            ),
-            component_scores=component_scores,
-        )
-
-    if (
-        move_pct >= 5
-        and move_pct <= 20
-        and (change_1h >= 2 or change_2h >= 4 or change_4h >= 6)
-        and change_24h >= 5
-        and liquidity_label in {"Thin", "Very thin"}
-        and exhaustion_level != "High"
-        and (
-            volume_acceleration_1h >= 1.2
-            or volume_acceleration_2h >= 1.2
-            or change_1h >= 4
-            or change_2h >= 7
-        )
-    ):
-        confidence = "Medium" if (
-            volume_acceleration_1h >= 1.5
-            or volume_acceleration_2h >= 1.5
-            or change_1h >= 4
-            or change_2h >= 7
-        ) else "Low"
-        return _classification(
-            alert_type="Speculative Early Runner Alert",
-            should_alert=True,
-            risk_level="High",
-            potential_bucket="High-risk early runner watch",
-            confidence=confidence,
-            reason=(
-                "Thin-liquidity coin showing early abnormal movement. This is "
-                "not a clean continuation setup, but it may be worth monitoring "
-                "before it becomes parabolic."
             ),
             component_scores=component_scores,
         )

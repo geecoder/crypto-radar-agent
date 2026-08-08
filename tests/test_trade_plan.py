@@ -115,7 +115,7 @@ def test_generate_trade_plan_for_parabolic_watch_is_monitoring_only() -> None:
     assert plan["max_hold_hours"] is None
     assert plan["should_paper_trade"] is False
     assert plan["parabolic_paper_eligible"] is False
-    assert "between 50% and 150%" in plan["parabolic_paper_reason"]
+    assert "at least 50%" in plan["parabolic_paper_reason"]
     assert (
         plan["risk_note"]
         == "High risk. This is not a clean entry signal."

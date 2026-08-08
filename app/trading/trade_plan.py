@@ -7,7 +7,6 @@ places real orders and never touches private exchange APIs.
 from app.trading.strategy_config import (
     PaperTradingStrategy,
     get_parabolic_paper_strategy,
-    get_speculative_early_runner_strategy,
 )
 
 DEFAULT_MAX_HOLD_HOURS = 48
@@ -65,9 +64,6 @@ def generate_trade_plan(result: dict) -> dict:
                 "above Thin and exhaustion risk below High."
             ),
         )
-
-    if alert_type == "Speculative Early Runner Alert":
-        return _build_speculative_early_runner_plan(result, symbol, latest_close)
 
     if alert_type == "Continuation Alert":
         should_paper_trade, reason = _existing_paper_trading_rules_pass(result)
@@ -269,143 +265,6 @@ def _build_parabolic_monitoring_plan(
     }
 
 
-def _build_speculative_early_runner_plan(
-    result: dict,
-    symbol: str,
-    latest_close: float,
-) -> dict:
-    """Build a high-risk paper-only plan for thin-liquidity early runners."""
-    strategy = get_speculative_early_runner_strategy()
-    should_paper_trade, reason = _speculative_early_runner_paper_eligibility(result)
-
-    return {
-        **_base_plan(symbol, "Speculative Early Runner Alert", latest_close),
-        "trade_plan_type": "speculative_early_runner",
-        "recommended_action": "Watch closely; high-risk early movement",
-        "entry_approach": (
-            "Only consider paper simulation after confirmation or pullback hold"
-        ),
-        "entry_zone_low": _price_at_pct(latest_close, -3),
-        "entry_zone_high": round_price(latest_close),
-        "stop_loss_price": _price_at_pct(latest_close, strategy.stop_loss_pct),
-        "stop_loss_pct": strategy.stop_loss_pct,
-        "take_profit_1_price": _price_at_pct(
-            latest_close,
-            strategy.take_profit_1_pct,
-        ),
-        "take_profit_1_pct": strategy.take_profit_1_pct,
-        "take_profit_2_price": _price_at_pct(
-            latest_close,
-            strategy.take_profit_2_pct,
-        ),
-        "take_profit_2_pct": strategy.take_profit_2_pct,
-        "take_profit_3_price": _price_at_pct(
-            latest_close,
-            strategy.take_profit_3_pct,
-        ),
-        "take_profit_3_pct": strategy.take_profit_3_pct,
-        "max_hold_hours": strategy.max_hold_hours,
-        "invalidation_rule": (
-            "Invalidate if price loses the pullback hold, short-term momentum "
-            "fades, or the planned stop is hit."
-        ),
-        "risk_note": (
-            "High risk. Thin-liquidity early runner. This is not a clean "
-            "continuation setup."
-        ),
-        "should_paper_trade": should_paper_trade,
-        "speculative_paper_eligible": should_paper_trade,
-        "speculative_paper_reason": reason,
-        "reason": reason,
-    }
-
-
-def _speculative_early_runner_paper_eligibility(result: dict) -> tuple[bool, str]:
-    """Return whether a speculative early runner can create a small paper trade."""
-    alert_type = _get_alert_type(result)
-    opportunity_score = _safe_float(
-        _get_opportunity_value(result, "opportunity_score"),
-        default=None,
-    )
-    liquidity_label = _get_liquidity_label(result).strip()
-    target_bucket = str(_get_opportunity_value(result, "target_bucket") or "").strip()
-    classification = str(
-        _get_opportunity_value(result, "classification") or ""
-    ).strip()
-    exhaustion_level = _get_exhaustion_risk_level(result).strip()
-    move_pct = _safe_float(_get_move_from_recent_low_pct(result), default=None)
-    change_1h = _safe_float(_get_recent_price_change(result, "change_1h_pct")) or 0
-    change_2h = _safe_float(_get_recent_price_change(result, "change_2h_pct")) or 0
-    change_4h = _safe_float(_get_recent_price_change(result, "change_4h_pct")) or 0
-    volume_acceleration_1h = (
-        _safe_float(
-            _get_volume_acceleration_ratio(
-                result,
-                "volume_acceleration_1h_ratio",
-            )
-        )
-        or 0
-    )
-    volume_acceleration_2h = (
-        _safe_float(
-            _get_volume_acceleration_ratio(
-                result,
-                "volume_acceleration_2h_ratio",
-            )
-        )
-        or 0
-    )
-
-    if alert_type != "Speculative Early Runner Alert":
-        return (
-            False,
-            "Rejected speculative runner: alert type is not Speculative Early Runner Alert.",
-        )
-
-    if opportunity_score is None:
-        return False, "Rejected speculative runner: opportunity score is missing."
-
-    # Low-signal coins (score < 40) are eligible when the move and volume
-    # confirm a real runner: move_pct > 8% and volume_acceleration_2h >= 1.5x.
-    low_signal_override = (
-        move_pct is not None and move_pct > 8 and volume_acceleration_2h >= 1.5
-    )
-    if opportunity_score < 40 and not low_signal_override:
-        return False, "Rejected speculative runner: opportunity score below 40."
-
-    # "No clear upside setup" is allowed when score >= 50 or when the low-signal
-    # override is active (strong move + volume acceleration compensates).
-    if (
-        target_bucket.lower() == "no clear upside setup"
-        and opportunity_score < 50
-        and not low_signal_override
-    ):
-        return (
-            False,
-            "Rejected speculative runner: target bucket has no clear upside setup "
-            "and score below 50.",
-        )
-
-    # Very thin liquidity is allowed for speculative paper-only simulation.
-
-    if exhaustion_level.lower() == "high":
-        return False, "Rejected speculative runner: exhaustion risk is High."
-
-    if move_pct is None or move_pct < 5 or move_pct > 20:
-        return (
-            False,
-            "Rejected speculative runner: move from recent low must be between 5% and 20%.",
-        )
-
-    if not (volume_acceleration_1h >= 2 or volume_acceleration_2h >= 2):
-        return False, "Rejected speculative runner: volume acceleration below 2x."
-
-    if not (change_1h >= 2 or change_2h >= 4 or change_4h >= 6):
-        return False, "Rejected speculative runner: price change confirmation is too weak."
-
-    return True, "Speculative early runner paper trade eligible."
-
-
 def _parabolic_paper_trade_eligibility(
     result: dict,
 ) -> tuple[bool, str, PaperTradingStrategy]:
@@ -494,43 +353,6 @@ def _get_exhaustion_risk_level(result: dict) -> str:
 
     exhaustion_signal = result.get("exhaustion_signal") or {}
     return str(exhaustion_signal.get("risk_level", ""))
-
-
-def _get_move_from_recent_low_pct(result: dict):
-    """Read move-from-low percentage from nested or flattened result data."""
-    if result.get("move_from_recent_low_pct") is not None:
-        return result.get("move_from_recent_low_pct")
-
-    move_stage_signal = result.get("move_stage_signal") or {}
-    return move_stage_signal.get("move_from_recent_low_pct")
-
-
-def _get_recent_price_change(result: dict, key: str):
-    """Read recent price changes from nested or flattened result data."""
-    if result.get(key) is not None:
-        return result.get(key)
-
-    recent_changes = result.get("recent_price_changes") or {}
-    return recent_changes.get(key)
-
-
-def _get_volume_acceleration_ratio(result: dict, key: str):
-    """Read volume acceleration ratios from nested or flattened result data."""
-    if result.get(key) is not None:
-        return result.get(key)
-
-    volume_acceleration = result.get("volume_acceleration") or {}
-    return volume_acceleration.get(key)
-
-
-def _get_opportunity_value(result: dict, key: str):
-    """Read opportunity values from nested or flattened result data."""
-    opportunity = result.get("opportunity") or {}
-
-    if opportunity.get(key) is not None:
-        return opportunity.get(key)
-
-    return result.get(key)
 
 
 def _safe_float(value, default: float | None = 0.0) -> float | None:

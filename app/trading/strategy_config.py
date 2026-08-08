@@ -11,7 +11,6 @@ class PaperTradingStrategy:
     minimum_opportunity_score: int
     min_move_from_recent_low_pct: float
     max_move_from_recent_low_pct: float
-    allow_thin_liquidity: bool
     allow_high_exhaustion: bool
     stop_loss_pct: float
     take_profit_1_pct: float
@@ -34,13 +33,18 @@ class PaperTradingStrategy:
 
 
 def get_default_paper_trading_strategy() -> PaperTradingStrategy:
-    """Return the default momentum-continuation paper trading strategy."""
+    """Return the default momentum-continuation paper trading strategy.
+
+    Covers Early Pump, Active Breakout, and Continuation alerts — all three
+    share one non-parabolic move-from-recent-low window (3-50%, Stages 2-5).
+    Liquidity is no longer a hard-coded allow/deny here: every candidate is
+    gated by the real order-book slippage check in paper_trading.py instead.
+    """
     return PaperTradingStrategy(
         name="default_momentum_continuation",
         minimum_opportunity_score=55,
         min_move_from_recent_low_pct=3,
-        max_move_from_recent_low_pct=20,
-        allow_thin_liquidity=True,
+        max_move_from_recent_low_pct=50,
         allow_high_exhaustion=False,
         # Widened from -5% to -10% — crypto routinely wicks through -7%.
         # Position halved from 100 → 50 so dollar-risk-per-trade stays constant.
@@ -61,7 +65,6 @@ def get_conservative_paper_trading_strategy() -> PaperTradingStrategy:
         minimum_opportunity_score=75,
         min_move_from_recent_low_pct=3,
         max_move_from_recent_low_pct=15,
-        allow_thin_liquidity=False,
         allow_high_exhaustion=False,
         stop_loss_pct=-3,
         take_profit_1_pct=6,
@@ -79,7 +82,6 @@ def get_aggressive_paper_trading_strategy() -> PaperTradingStrategy:
         minimum_opportunity_score=65,
         min_move_from_recent_low_pct=5,
         max_move_from_recent_low_pct=30,
-        allow_thin_liquidity=False,
         allow_high_exhaustion=False,
         stop_loss_pct=-10,
         take_profit_1_pct=10,
@@ -91,36 +93,21 @@ def get_aggressive_paper_trading_strategy() -> PaperTradingStrategy:
 
 
 def get_parabolic_paper_strategy() -> PaperTradingStrategy:
-    """Return the high-risk parabolic continuation paper-only strategy."""
+    """Return the high-risk parabolic continuation paper-only strategy.
+
+    Move window is 50%+ with no upper bound (Stage 6) — previously capped at
+    150%, which rejected exactly the biggest legs of real parabolic movers.
+    """
     return PaperTradingStrategy(
         name="parabolic_continuation_paper",
         minimum_opportunity_score=25,
         min_move_from_recent_low_pct=50,
-        max_move_from_recent_low_pct=150,
-        allow_thin_liquidity=True,
+        max_move_from_recent_low_pct=float("inf"),
         allow_high_exhaustion=False,
         stop_loss_pct=-8,
         take_profit_1_pct=12,
         take_profit_2_pct=25,
         take_profit_3_pct=50,
-        max_hold_hours=24,
-        simulated_position_size=25,
-    )
-
-
-def get_speculative_early_runner_strategy() -> PaperTradingStrategy:
-    """Return the high-risk speculative early-runner paper-only strategy."""
-    return PaperTradingStrategy(
-        name="speculative_early_runner_paper",
-        minimum_opportunity_score=40,
-        min_move_from_recent_low_pct=5,
-        max_move_from_recent_low_pct=20,
-        allow_thin_liquidity=True,
-        allow_high_exhaustion=False,
-        stop_loss_pct=-10,
-        take_profit_1_pct=10,
-        take_profit_2_pct=20,
-        take_profit_3_pct=35,
         max_hold_hours=24,
         simulated_position_size=25,
     )
@@ -144,8 +131,5 @@ def get_strategy_by_name(name: str | None) -> PaperTradingStrategy:
 
     if normalized_name == "parabolic":
         return get_parabolic_paper_strategy()
-
-    if normalized_name in {"speculative", "early-runner", "early_runner"}:
-        return get_speculative_early_runner_strategy()
 
     return get_default_paper_trading_strategy()

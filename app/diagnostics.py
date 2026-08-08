@@ -3,7 +3,10 @@
 from contextlib import redirect_stdout
 from io import StringIO
 
-from app.indicators.explosive_mover import evaluate_speculative_early_runner
+from app.indicators.explosive_mover import (
+    classify_explosive_mover,
+    evaluate_speculative_early_runner,
+)
 from app.scanner import scan_symbol
 
 NO_VALID_CONTINUATION_TARGETS = {
@@ -428,48 +431,28 @@ def _speculative_early_runner_status(result: dict) -> tuple[bool, str]:
 
 
 def _explosive_rule_statuses(result: dict) -> dict:
-    """Return independent eligibility flags for explosive alert categories."""
-    move_stage = result.get("move_stage_signal") or {}
-    recent_changes = result.get("recent_price_changes") or {}
-    volume_acceleration = result.get("volume_acceleration") or {}
-    liquidity = result.get("liquidity_signal") or {}
-    exhaustion = result.get("exhaustion_signal") or {}
-    trend = result.get("trend_signal") or {}
-    volatility = result.get("volatility_signal") or {}
-    move_pct = _safe_float(move_stage.get("move_from_recent_low_pct"))
-    change_1h = _safe_float(recent_changes.get("change_1h_pct"))
-    change_2h = _safe_float(recent_changes.get("change_2h_pct"))
-    change_4h = _safe_float(recent_changes.get("change_4h_pct"))
-    change_24h = _safe_float(recent_changes.get("change_24h_pct"))
-    volume_score = _get_signal_score(volume_acceleration)
-    liquidity_score = _get_signal_score(liquidity)
-    trend_score = _get_signal_score(trend)
-    volatility_score = _get_signal_score(volatility)
-    exhaustion_level = str(exhaustion.get("risk_level", "Low"))
+    """Return which explosive-mover lane this result's signals classify into.
+
+    Delegates to the real classify_explosive_mover() — the function the live
+    scanner actually calls — instead of re-implementing its thresholds, so
+    this diagnostic can never silently drift from real alert behavior.
+    """
+    classification = classify_explosive_mover(
+        result.get("move_stage_signal") or {},
+        result.get("recent_price_changes") or {},
+        result.get("volume_acceleration") or {},
+        result.get("liquidity_signal") or {},
+        result.get("exhaustion_signal") or {},
+        result.get("breakout_signal") or {},
+        result.get("trend_signal") or {},
+        result.get("volatility_signal") or {},
+    )
+    alert_type = classification.get("alert_type")
 
     return {
-        "early_pump": (
-            move_pct >= 3
-            and move_pct <= 10
-            and (change_1h >= 3 or change_2h >= 5)
-            and volume_score >= 40
-            and liquidity_score >= 40
-            and exhaustion_level != "High"
-            and trend_score >= 60
-        ),
-        "active_breakout": (
-            move_pct > 10
-            and move_pct <= 30
-            and (change_1h >= 5 or change_4h >= 12)
-            and volume_score >= 60
-            and liquidity_score >= 40
-            and trend_score >= 60
-            and volatility_score >= 60
-        ),
-        "parabolic_watch": (
-            (move_pct > 50 or change_4h >= 30 or change_24h >= 50)
-            and liquidity_score >= 40
-        ),
+        "early_pump": alert_type == "Early Pump Alert",
+        "active_breakout": alert_type == "Active Breakout Alert",
+        "parabolic_watch": alert_type == "Parabolic Watch Alert",
     }
 
 

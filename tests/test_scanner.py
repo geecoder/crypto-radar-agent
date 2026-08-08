@@ -69,8 +69,12 @@ def test_scan_symbol_returns_signals_and_opportunity_score() -> None:
     assert result["recent_price_changes"]["name"] == "recent_price_changes"
     assert result["volume_acceleration"]["name"] == "volume_acceleration"
     assert result["explosive_mover"]["name"] == "explosive_mover"
-    assert result["alert_type"] == "Active Breakout Alert"
-    assert result["trade_plan"]["trade_plan_type"] == "active_breakout_continuation"
+    # This fixture's ~22% move is Stage 5 (20-50%, move_stage score 45) — above
+    # Active Breakout's narrowed 10-20% window (Block 3), so it now falls
+    # through to the score-based Continuation Alert fallback instead of a
+    # separate explosive lane, matching the reconciled single-strategy model.
+    assert result["alert_type"] == "Continuation Alert"
+    assert result["trade_plan"]["trade_plan_type"] == "standard_continuation"
     assert result["continuation_target"]["name"] == "continuation_target"
     assert result["opportunity"]["opportunity_score"] == 85
 

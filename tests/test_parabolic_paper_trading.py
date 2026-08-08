@@ -93,24 +93,29 @@ def test_parabolic_watch_alert_eligible_case_creates_paper_trade(
     assert saved_trades[0]["max_hold_hours"] == 24
 
 
-def test_parabolic_rejected_when_move_too_extended_above_150_pct() -> None:
+def test_parabolic_allows_moves_far_above_150_pct() -> None:
+    """The 150% ceiling was rejecting real parabolic movers' biggest legs
+    (e.g. HEIUSDT +214%) — the window is now 50%+ with no upper bound."""
     alert = _parabolic_alert()
-    alert["move_stage_signal"]["move_from_recent_low_pct"] = 151
+    alert["move_stage_signal"]["move_from_recent_low_pct"] = 214
+    alert["recent_price_changes"]["change_24h_pct"] = 75
+
+    should_create, reason = should_create_parabolic_paper_trade(alert)
+
+    assert should_create is True
+    assert reason == "Parabolic paper trade eligible."
+
+
+def test_parabolic_rejected_when_24h_change_below_50_pct() -> None:
+    """Aligned to the same 50% threshold that fires the alert itself
+    (explosive_mover.py) — previously 40%, looser than the trigger."""
+    alert = _parabolic_alert()
+    alert["recent_price_changes"]["change_24h_pct"] = 49.9
 
     should_create, reason = should_create_parabolic_paper_trade(alert)
 
     assert should_create is False
-    assert "between 50% and 150%" in reason
-
-
-def test_parabolic_rejected_when_24h_change_below_40_pct() -> None:
-    alert = _parabolic_alert()
-    alert["recent_price_changes"]["change_24h_pct"] = 39.9
-
-    should_create, reason = should_create_parabolic_paper_trade(alert)
-
-    assert should_create is False
-    assert "24h change is below 40%" in reason
+    assert "24h change is below 50%" in reason
 
 
 def test_parabolic_rejected_when_exhaustion_risk_is_high() -> None:
@@ -121,27 +126,6 @@ def test_parabolic_rejected_when_exhaustion_risk_is_high() -> None:
 
     assert should_create is False
     assert "Exhaustion risk is High" in reason
-
-
-def test_parabolic_thin_liquidity_requires_minimum_quote_volume() -> None:
-    alert = _parabolic_alert()
-    alert["liquidity_signal"] = {
-        "score": 40,
-        "label": "Thin",
-        "quote_volume": 4_999_999,
-    }
-
-    should_create, reason = should_create_parabolic_paper_trade(alert)
-
-    assert should_create is False
-    assert "at least 5,000,000" in reason
-
-    alert["liquidity_signal"]["quote_volume"] = 5_000_000
-
-    should_create, reason = should_create_parabolic_paper_trade(alert)
-
-    assert should_create is True
-    assert reason == "Parabolic paper trade eligible."
 
 
 def test_parabolic_strategy_risk_and_position_values() -> None:

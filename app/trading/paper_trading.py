@@ -20,7 +20,6 @@ from app.trading.strategy_config import (
     PaperTradingStrategy,
     get_default_paper_trading_strategy,
     get_parabolic_paper_strategy,
-    get_speculative_early_runner_strategy,
 )
 from app.utils.logger import get_logger
 
@@ -37,24 +36,29 @@ SLIPPAGE_PCT_BY_LIQUIDITY = {
     "very thin": 1.5,
 }
 DEFAULT_SLIPPAGE_PCT = 1.5
-ALLOWED_CONTINUATION_TARGETS = {
-    "+20% continuation watch",
-    "+50% high-volatility watch",
-    "+100% speculative momentum watch",
-    "Early move watch",
-}
 PAPER_TRADE_ALLOWED_ALERT_TYPES = {
     "Continuation Alert",
     "Early Pump Alert",
     "Active Breakout Alert",
 }
 PARABOLIC_WATCH_ALERT_TYPE = "Parabolic Watch Alert"
+# Legacy alert type/trade-plan-type from the retired Speculative Early Runner
+# lane (folded into the unified Early Pump/Active Breakout/Continuation range
+# in Block 3 — its only reason to exist was bypassing the liquidity floor,
+# which the real slippage gate now does for every alert type). Kept only so
+# reporting modules can still bucket the ~100 historical trades correctly —
+# no new trade is ever created with this alert type.
 SPECULATIVE_EARLY_RUNNER_ALERT_TYPE = "Speculative Early Runner Alert"
 SPECULATIVE_EARLY_RUNNER_TRADE_PLAN_TYPE = "speculative_early_runner"
 PARABOLIC_TRADE_PLAN_TYPE = "parabolic_high_risk_paper"
-PARABOLIC_MIN_24H_CHANGE_PCT = 40
-PARABOLIC_MIN_QUOTE_VOLUME = 5_000_000
+# Aligned to the same 50% threshold that fires the Parabolic Watch Alert
+# itself (explosive_mover.py) — previously 40%, which made this "extra" gate
+# looser than the trigger instead of stricter.
+PARABOLIC_MIN_24H_CHANGE_PCT = 50
 MAX_OPEN_PAPER_TRADES_BY_ALERT_TYPE = {
+    # No new trade is ever created with this alert type anymore (Block 3
+    # retired the lane), but app/analysis/paper_trading_report.py still reads
+    # this key when reporting on the ~100 historical trades that used it.
     SPECULATIVE_EARLY_RUNNER_ALERT_TYPE: 5,
     PARABOLIC_WATCH_ALERT_TYPE: 10,
     "Continuation Alert": 10,
@@ -166,24 +170,29 @@ def should_create_paper_trade(
         or move_pct < strategy.min_move_from_recent_low_pct
         or move_pct > strategy.max_move_from_recent_low_pct
     ):
-        return (
-            False,
-            "Move from recent low must be between "
-            f"{strategy.min_move_from_recent_low_pct:g}% and "
-            f"{strategy.max_move_from_recent_low_pct:g}%.",
-        )
+        return False, _move_range_reason(strategy)
 
     exhaustion_level = str(_get_exhaustion_risk_level(result) or "").strip()
 
     if not strategy.allow_high_exhaustion and exhaustion_level.lower() == "high":
         return False, "Exhaustion risk is High."
 
-    liquidity_label = str(_get_liquidity_label(result) or "").strip()
-
-    if not strategy.allow_thin_liquidity and liquidity_label.lower() == "very thin":
-        return False, "Liquidity is Very thin."
-
     return True, "Paper trade eligible."
+
+
+def _move_range_reason(strategy: PaperTradingStrategy) -> str:
+    """Build a human-readable move-window rejection reason for a strategy."""
+    if strategy.max_move_from_recent_low_pct == float("inf"):
+        return (
+            "Move from recent low must be at least "
+            f"{strategy.min_move_from_recent_low_pct:g}%."
+        )
+
+    return (
+        "Move from recent low must be between "
+        f"{strategy.min_move_from_recent_low_pct:g}% and "
+        f"{strategy.max_move_from_recent_low_pct:g}%."
+    )
 
 
 def should_create_parabolic_paper_trade(
@@ -218,17 +227,7 @@ def should_create_parabolic_paper_trade(
         or move_pct < strategy.min_move_from_recent_low_pct
         or move_pct > strategy.max_move_from_recent_low_pct
     ):
-        return (
-            False,
-            "Move from recent low must be between "
-            f"{strategy.min_move_from_recent_low_pct:g}% and "
-            f"{strategy.max_move_from_recent_low_pct:g}%.",
-        )
-
-    liquidity_ok, liquidity_reason = _parabolic_liquidity_check(result)
-
-    if not liquidity_ok:
-        return False, liquidity_reason
+        return False, _move_range_reason(strategy)
 
     exhaustion_level = str(_get_exhaustion_risk_level(result) or "").strip()
 
@@ -327,19 +326,6 @@ def create_paper_trades_from_alerts(
                     selected_strategy,
                     reason,
                 )
-        elif alert_type == SPECULATIVE_EARLY_RUNNER_ALERT_TYPE:
-            trade_plan = _get_trade_plan(candidate)
-            selected_strategy = get_speculative_early_runner_strategy()
-            eligible = bool(trade_plan.get("should_paper_trade", False))
-            reason = (
-                trade_plan.get("speculative_paper_reason")
-                or trade_plan.get("reason")
-                or (
-                    "Speculative early runner trade plan allows paper trading."
-                    if eligible
-                    else "Trade plan does not allow paper trading."
-                )
-            )
         else:
             eligible, reason = should_create_paper_trade(candidate, strategy)
 
@@ -1369,17 +1355,6 @@ def _get_liquidity_label(result: dict) -> Any:
     return _first_present(result, "liquidity_label") or liquidity_signal.get("label")
 
 
-def _get_liquidity_score(result: dict) -> Any:
-    """Read the liquidity score from nested or flattened alert data."""
-    liquidity_signal = result.get("liquidity_signal") or {}
-    flattened_score = _first_present(result, "liquidity_score")
-
-    if flattened_score is not None:
-        return flattened_score
-
-    return liquidity_signal.get("score")
-
-
 def _get_tradability_score(result: dict) -> Any:
     """Read the tradability score from nested or flattened alert data."""
     tradability_signal = result.get("tradability_signal") or {}
@@ -1448,24 +1423,6 @@ def _meets_hard_trade_gates(result: dict, position_size_usd: float) -> tuple[boo
     return _meets_slippage_gate(result, position_size_usd)
 
 
-def _get_quote_volume(result: dict) -> Any:
-    """Read 24h quote volume from common result shapes."""
-    liquidity_signal = result.get("liquidity_signal") or {}
-    ticker_24hr = result.get("ticker_24hr") or {}
-    flattened_quote_volume = _first_present(result, "quote_volume", "quoteVolume")
-
-    if flattened_quote_volume is not None:
-        return flattened_quote_volume
-
-    if liquidity_signal.get("quote_volume") is not None:
-        return liquidity_signal.get("quote_volume")
-
-    if liquidity_signal.get("quoteVolume") is not None:
-        return liquidity_signal.get("quoteVolume")
-
-    return ticker_24hr.get("quoteVolume")
-
-
 def _get_exhaustion_risk_level(result: dict) -> Any:
     """Read exhaustion risk from nested or flattened alert data."""
     exhaustion_signal = result.get("exhaustion_signal") or {}
@@ -1496,36 +1453,6 @@ def _get_volume_acceleration_ratio(result: dict, key: str) -> Any:
         return flattened_ratio
 
     return volume_acceleration.get(key)
-
-
-def _parabolic_liquidity_check(result: dict) -> tuple[bool, str]:
-    """Return whether liquidity is acceptable for parabolic paper testing."""
-    liquidity_label = str(_get_liquidity_label(result) or "").strip().lower()
-    liquidity_score = _safe_float(_get_liquidity_score(result), default=None)
-    quote_volume = _safe_float(_get_quote_volume(result), default=0) or 0
-
-    if liquidity_label == "very thin":
-        return False, "Liquidity is Very thin."
-
-    if liquidity_label == "thin":
-        if quote_volume >= PARABOLIC_MIN_QUOTE_VOLUME:
-            return True, "Thin liquidity allowed with sufficient quote volume."
-
-        return (
-            False,
-            (
-                "Thin liquidity requires 24h quote volume of at least "
-                f"{PARABOLIC_MIN_QUOTE_VOLUME:,.0f}."
-            ),
-        )
-
-    if liquidity_score is not None and liquidity_score >= 40:
-        return True, "Liquidity score is acceptable."
-
-    if liquidity_label in {"good", "strong", "excellent"}:
-        return True, "Liquidity label is acceptable."
-
-    return False, "Liquidity score is below 40."
 
 
 def _has_parabolic_reacceleration(result: dict) -> bool:

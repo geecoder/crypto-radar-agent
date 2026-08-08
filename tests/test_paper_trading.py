@@ -108,20 +108,6 @@ def test_should_create_paper_trade_rejects_low_score() -> None:
     assert "below 55" in reason
 
 
-def test_should_create_paper_trade_rejects_very_thin_liquidity() -> None:
-    from app.trading.strategy_config import get_conservative_paper_trading_strategy
-
-    alert = _eligible_alert()
-    alert["liquidity_signal"]["label"] = "Very thin"
-    alert["opportunity"]["opportunity_score"] = 80  # meets conservative min of 75
-
-    # Conservative strategy has allow_thin_liquidity=False → rejects "Very thin"
-    should_create, reason = should_create_paper_trade(alert, strategy=get_conservative_paper_trading_strategy())
-
-    assert should_create is False
-    assert "Very thin" in reason
-
-
 def test_should_create_paper_trade_rejects_high_exhaustion() -> None:
     alert = _eligible_alert()
     alert["exhaustion_signal"]["risk_level"] = "High"

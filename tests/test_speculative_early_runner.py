@@ -1,8 +1,11 @@
-"""Tests for speculative early-runner detection and paper handling."""
+"""Tests for speculative early-runner detection and paper handling.
 
-import json
-
-import pytest
+The Speculative Early Runner alert type was retired as a live routing lane
+in Block 3 (its move-window and liquidity-carve-out folded into the unified
+Early Pump/Active Breakout/Continuation range). `evaluate_speculative_early_runner`
+remains as a standalone diagnostic-only function; these tests cover that and
+the surrounding reporting/market-filter code that still references the
+(historical) alert type."""
 
 from app.binance.market_filter import select_scan_universe
 from app.diagnostics import format_diagnostic_report
@@ -11,21 +14,6 @@ from app.indicators.explosive_mover import (
     evaluate_speculative_early_runner,
 )
 from app.reporting import format_alert_message
-from app.trading import paper_trading
-from app.trading.paper_trading import create_paper_trades_from_alerts
-from app.trading.trade_plan import generate_trade_plan
-
-
-@pytest.fixture(autouse=True)
-def _default_hard_gate_passes(monkeypatch):
-    """These tests exercise speculative-runner trade-plan gating, not the
-    slippage gate — default it to pass so they don't make a real Binance
-    order-book request."""
-    monkeypatch.setattr(
-        paper_trading,
-        "_meets_hard_trade_gates",
-        lambda result, position_size_usd: (True, "Slippage gate passed (stub)."),
-    )
 
 
 def _signal(score: int) -> dict:
@@ -106,28 +94,21 @@ def _speculative_alert() -> dict:
             ),
         },
     }
-    result["trade_plan"] = generate_trade_plan(result)
+    # generate_trade_plan() no longer has a branch for this retired alert
+    # type (Block 3) — build the trade_plan shape directly, matching what a
+    # historical alert_history row's stored trade_plan JSON looks like.
+    result["trade_plan"] = {
+        "trade_plan_type": "speculative_early_runner",
+        "should_paper_trade": True,
+        "speculative_paper_eligible": True,
+        "speculative_paper_reason": "Speculative early runner paper trade eligible.",
+        "risk_note": (
+            "High risk. Thin-liquidity early runner. This is not a clean "
+            "continuation setup."
+        ),
+        "reason": "Speculative early runner paper trade eligible.",
+    }
     return result
-
-
-def test_speculative_early_runner_qualifies_with_thin_liquidity() -> None:
-    result = classify_explosive_mover(
-        _move_signal(8),
-        _changes(),
-        _volume_acceleration(),
-        _liquidity(),
-        _exhaustion(),
-        _signal(0),
-        _signal(40),
-        _signal(40),
-    )
-
-    assert result["should_alert"] is True
-    assert result["alert_type"] == "Speculative Early Runner Alert"
-    assert result["risk_level"] == "High"
-    assert result["potential_bucket"] == "High-risk early runner watch"
-    assert result["confidence"] == "Low"
-    assert "not a clean continuation setup" in result["reason"]
 
 
 def test_speculative_early_runner_does_not_qualify_with_high_exhaustion() -> None:
@@ -143,7 +124,11 @@ def test_speculative_early_runner_does_not_qualify_with_high_exhaustion() -> Non
     assert "exhaustion risk is High" in status["reason"]
 
 
-def test_move_above_20_pct_does_not_become_speculative_runner() -> None:
+def test_move_above_20_pct_does_not_become_active_breakout() -> None:
+    """Active Breakout's window narrowed to 10-20% (was 10-30%) — a 25% move
+    with otherwise-qualifying signals now falls through to no explosive alert,
+    letting the score-based Continuation Alert fallback (3-50% window) claim
+    it instead, rather than a separate lane with its own thresholds."""
     result = classify_explosive_mover(
         _move_signal(25),
         _changes(change_1h=5, change_4h=12, change_24h=18),
@@ -155,51 +140,7 @@ def test_move_above_20_pct_does_not_become_speculative_runner() -> None:
         _signal(60),
     )
 
-    assert result["alert_type"] == "Active Breakout Alert"
-
-
-def test_speculative_paper_trade_created_only_when_plan_allows(
-    monkeypatch,
-    tmp_path,
-) -> None:
-    trades_file = tmp_path / "paper_trades.json"
-    events_file = tmp_path / "paper_trade_events.json"
-    eligible = _speculative_alert()
-    # Speculative early runners are normally caught on thin-liquidity coins, but
-    # the PAPER_MIN_LIQUIDITY hard floor (Block A) blocks trade creation below
-    # Good liquidity regardless of strategy — override so this test exercises
-    # the speculative-runner trade-plan gating, not the liquidity floor.
-    eligible["liquidity_signal"] = _liquidity(label="Good", score=60)
-    eligible["tradability_signal"] = {"score": 70}
-    rejected = _speculative_alert()
-    rejected["liquidity_signal"] = _liquidity(label="Good", score=60)
-    rejected["tradability_signal"] = {"score": 70}
-    rejected["volume_acceleration"] = _volume_acceleration(ratio_1h=1.5, ratio_2h=1.5)
-    rejected["trade_plan"] = generate_trade_plan(rejected)
-
-    monkeypatch.setattr(paper_trading, "USE_SUPABASE", False)
-    monkeypatch.setattr(paper_trading, "PAPER_TRADES_FILE", str(trades_file))
-    monkeypatch.setattr(paper_trading, "PAPER_TRADE_EVENTS_FILE", str(events_file))
-
-    decisions = create_paper_trades_from_alerts([eligible, rejected])
-    saved_trades = json.loads(trades_file.read_text(encoding="utf-8"))
-
-    assert eligible["trade_plan"]["should_paper_trade"] is True
-    assert rejected["trade_plan"]["should_paper_trade"] is False
-    assert len(decisions) == 2
-    assert decisions[0]["decision"] == "created"
-    assert decisions[0]["paper_trade_created"] is True
-    assert decisions[1]["decision"] == "ineligible"
-    assert decisions[1]["paper_trade_created"] is False
-    assert saved_trades[0]["strategy_name"] == "speculative_early_runner_paper"
-    assert saved_trades[0]["alert_type"] == "Speculative Early Runner Alert"
-    assert saved_trades[0]["trade_plan_type"] == "speculative_early_runner"
-    assert saved_trades[0]["simulated_position_size"] == 25
-    assert saved_trades[0]["stop_loss_pct"] == -10
-    assert saved_trades[0]["take_profit_1_pct"] == 10
-    assert saved_trades[0]["take_profit_2_pct"] == 20
-    assert saved_trades[0]["take_profit_3_pct"] == 35
-    assert saved_trades[0]["max_hold_hours"] == 24
+    assert result["alert_type"] == "No explosive mover alert"
 
 
 def test_telegram_and_diagnostic_output_include_speculative_runner() -> None:
