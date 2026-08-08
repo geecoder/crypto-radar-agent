@@ -7,6 +7,11 @@ import os
 from app.alerts.alert_history import append_alert_history, load_alert_history
 from app.alerts.alert_state import record_alert, should_send_alert
 from app.alerts.telegram import send_telegram_message
+from app.analysis.base_rates import (
+    compute_hit_rate_by_alert_type,
+    join_outcomes_with_alert_type,
+)
+from app.analysis.opportunity_feed import format_opportunity_feed, rank_opportunities
 from app.analysis.outcome_tracker import (
     check_alert_outcomes,
     load_alert_outcomes,
@@ -602,6 +607,32 @@ def _created_paper_trade_count(decisions: list[dict]) -> int:
     return sum(1 for decision in decisions if decision.get("paper_trade_created"))
 
 
+def _build_primary_feed_message(candidates_to_send: list[dict]) -> str:
+    """Build the primary Telegram push: the ranked opportunity feed.
+
+    Replaces the raw alert-list message as the bot's headline output (the
+    pivot from autonomous trader to discretionary decision-support tool —
+    see app/analysis/opportunity_feed.py). Every entry carries the
+    historical follow-through rate for its alert type baked in, so this
+    single change also satisfies "outcome-honesty on every alert."
+
+    Falls back to the plain alert message if the base-rate lookup fails for
+    any reason (e.g. a transient DB issue) — a reporting-layer problem
+    should never block the scan cycle from alerting.
+    """
+    try:
+        base_rate_stats = compute_hit_rate_by_alert_type(
+            join_outcomes_with_alert_type(
+                load_alert_history(limit=None), load_alert_outcomes()
+            )
+        )
+        ranked = rank_opportunities(candidates_to_send, base_rate_stats)
+        return format_opportunity_feed(ranked)
+    except Exception as exc:
+        print(f"Failed to build ranked opportunity feed, falling back to plain alert: {exc}")
+        return format_alert_message(candidates_to_send)
+
+
 def _persist_suppressed_paper_decision(candidate: dict, reason: str) -> None:
     """Persist a skipped paper decision for cooldown-suppressed alerts."""
     if not USE_SUPABASE:
@@ -789,7 +820,7 @@ def _run_normal_scan(args: argparse.Namespace, paper_strategy, scan_run_id: str 
             return
 
         telegram_sent, telegram_attempts = send_telegram_message(
-            format_alert_message(candidates_to_send)
+            _build_primary_feed_message(candidates_to_send)
         )
         telegram_error = _telegram_error(telegram_sent, telegram_attempts)
         _update_telegram_status_for_candidates(
