@@ -134,6 +134,8 @@ class BinancePublicClient:
         symbol: str,
         interval: str = "15m",
         limit: int = 100,
+        start_time_ms: int | None = None,
+        end_time_ms: int | None = None,
     ) -> list[list[Any]]:
         """Return candlestick data from Binance ``/api/v3/klines``.
 
@@ -141,11 +143,21 @@ class BinancePublicClient:
             symbol: Trading pair symbol, such as ``BTCUSDT``.
             interval: Candle interval, such as ``15m``, ``1h``, or ``1d``.
             limit: Maximum number of candles to return.
+            start_time_ms: Optional window start (Binance ``startTime``, ms
+                since epoch) — for replaying a specific historical window
+                (e.g. backtesting) instead of the most recent `limit` candles.
+            end_time_ms: Optional window end (Binance ``endTime``, ms since
+                epoch).
         """
-        return self._get(
-            "/api/v3/klines",
-            params={"symbol": symbol, "interval": interval, "limit": limit},
-        )
+        params = {"symbol": symbol, "interval": interval, "limit": limit}
+
+        if start_time_ms is not None:
+            params["startTime"] = start_time_ms
+
+        if end_time_ms is not None:
+            params["endTime"] = end_time_ms
+
+        return self._get("/api/v3/klines", params=params)
 
 
 def klines_to_dataframe(klines: list) -> pd.DataFrame:

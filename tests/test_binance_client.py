@@ -282,6 +282,38 @@ def test_klines_to_dataframe_keeps_candle_columns_and_converts_types() -> None:
     assert candles.loc[0, "close_time"] == pd.Timestamp("2024-01-01 00:14:59.999")
 
 
+def test_get_klines_includes_time_range_when_provided(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, dict[str, object] | None]] = []
+
+    def fake_get(
+        self: BinancePublicClient,
+        path: str,
+        params: dict[str, object] | None = None,
+    ) -> object:
+        calls.append((path, params))
+        return []
+
+    monkeypatch.setattr(BinancePublicClient, "_get", fake_get)
+
+    client = BinancePublicClient()
+    client.get_klines("BTCUSDT", interval="15m", limit=200, start_time_ms=1000, end_time_ms=2000)
+
+    assert calls == [
+        (
+            "/api/v3/klines",
+            {
+                "symbol": "BTCUSDT",
+                "interval": "15m",
+                "limit": 200,
+                "startTime": 1000,
+                "endTime": 2000,
+            },
+        ),
+    ]
+
+
 def test_klines_to_dataframe_handles_empty_klines() -> None:
     candles = klines_to_dataframe([])
 
