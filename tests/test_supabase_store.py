@@ -581,3 +581,39 @@ def _paper_trade_selects(source: str) -> str:
             statements.append(statement.split('"""', 2)[1])
 
     return "\n".join(statements).lower()
+
+
+def test_get_shadow_trades_for_paper_trade_queries_by_metadata_id(monkeypatch) -> None:
+    rows = [
+        {
+            "action": "market_buy",
+            "symbol": "BTCUSDT",
+            "quantity": 0.5,
+            "price": 100.2,
+            "metadata": {"paper_trade_id": "paper_BTCUSDT_1", "signal_price": 100.0},
+            "logged_at": "2026-08-08T00:00:00+00:00",
+        },
+        {
+            "action": "market_sell",
+            "symbol": "BTCUSDT",
+            "quantity": 0.5,
+            "price": 108.9,
+            "metadata": {"paper_trade_id": "paper_BTCUSDT_1", "signal_price": 109.0},
+            "logged_at": "2026-08-08T05:00:00+00:00",
+        },
+    ]
+    fake_connection = FakeConnection(rows)
+
+    monkeypatch.setattr(supabase_store, "get_connection", lambda: fake_connection)
+
+    shadow_trades = supabase_store.get_shadow_trades_for_paper_trade("paper_BTCUSDT_1")
+
+    query = fake_connection.queries[0]
+
+    assert "FROM shadow_trades" in query
+    assert "metadata->>'paper_trade_id'" in query
+    assert fake_connection.params == [("paper_BTCUSDT_1",)]
+    assert fake_connection.closed is True
+    assert len(shadow_trades) == 2
+    assert shadow_trades[0]["action"] == "market_buy"
+    assert shadow_trades[1]["metadata"]["signal_price"] == 109.0

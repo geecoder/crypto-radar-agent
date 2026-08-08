@@ -694,6 +694,7 @@ def update_open_paper_trades(client) -> dict:
             closed_trade = {**trade, **updates}
             _insert_paper_trade_event(_build_close_event(closed_trade))
             _log_shadow_trade_close(closed_trade)
+            _apply_real_slippage_if_available(closed_trade)
             exit_reason = str(updates.get("exit_reason") or "")
 
             if exit_reason == "max_hold_expired":
@@ -1000,13 +1001,117 @@ def _build_close_updates(
     }
 
 
-def _net_pnl_pct(gross_pnl_pct: float, liquidity_label: Any) -> float:
-    """Subtract round-trip fees and liquidity-scaled slippage from a gross P&L."""
-    slippage_pct = SLIPPAGE_PCT_BY_LIQUIDITY.get(
-        str(liquidity_label or "").strip().lower(),
-        DEFAULT_SLIPPAGE_PCT,
-    )
+def _net_pnl_pct(
+    gross_pnl_pct: float,
+    liquidity_label: Any,
+    real_slippage_pct: float | None = None,
+) -> float:
+    """Subtract round-trip fees and slippage from a gross P&L.
+
+    Uses real order-book-measured slippage when available (see
+    `_real_slippage_pct_for_trade`); otherwise falls back to the flat
+    liquidity-tiered estimate.
+    """
+    if real_slippage_pct is not None:
+        slippage_pct = real_slippage_pct
+    else:
+        slippage_pct = SLIPPAGE_PCT_BY_LIQUIDITY.get(
+            str(liquidity_label or "").strip().lower(),
+            DEFAULT_SLIPPAGE_PCT,
+        )
     return gross_pnl_pct - ROUND_TRIP_FEE_PCT - slippage_pct
+
+
+def _real_slippage_pct_for_trade(paper_trade_id: str | None) -> float | None:
+    """Return real measured round-trip slippage (%) from shadow_trades, or None.
+
+    Sums adverse slippage on both legs: the open (buy — adverse means paying
+    more than the signal price) and the close (sell — adverse means receiving
+    less). Returns None when no real fill data exists yet (JSON backend,
+    shadow persistence failure, or the close leg hasn't been logged yet), so
+    callers fall back to the flat liquidity-tiered estimate.
+    """
+    if not paper_trade_id or not USE_SUPABASE:
+        return None
+
+    try:
+        shadow_trades = supabase_store.get_shadow_trades_for_paper_trade(paper_trade_id)
+    except Exception as exc:
+        logger.warning(
+            "Failed to load shadow trades for %s: %s", paper_trade_id, exc
+        )
+        return None
+
+    total_slippage_pct = 0.0
+    found_any = False
+
+    for shadow_trade in shadow_trades:
+        metadata = shadow_trade.get("metadata") or {}
+        signal_price = _safe_float(metadata.get("signal_price"), default=None)
+        real_fill_price = _safe_float(metadata.get("real_fill_price"), default=None)
+
+        if signal_price is None or real_fill_price is None or signal_price <= 0:
+            continue
+
+        found_any = True
+        action = str(shadow_trade.get("action") or "")
+
+        if action == "market_buy":
+            total_slippage_pct += max(
+                0.0, (real_fill_price - signal_price) / signal_price * 100
+            )
+        elif action == "market_sell":
+            total_slippage_pct += max(
+                0.0, (signal_price - real_fill_price) / signal_price * 100
+            )
+
+    return total_slippage_pct if found_any else None
+
+
+def _apply_real_slippage_if_available(closed_trade: dict) -> None:
+    """Best-effort: recompute net_pnl_pct from real measured slippage.
+
+    Must run after both shadow-trade legs (open + close) are logged. When
+    real fill data isn't available (JSON backend, shadow persistence
+    failure, pre-Block-2 rows), the trade keeps the flat-estimate net_pnl_pct
+    it was closed with — this never blocks or fails a trade close.
+    """
+    real_slippage_pct = _real_slippage_pct_for_trade(closed_trade.get("id"))
+
+    if real_slippage_pct is None:
+        return
+
+    gross_pnl_pct = _safe_float(
+        closed_trade.get("blended_pnl_pct")
+        if closed_trade.get("blended_pnl_pct") is not None
+        else closed_trade.get("pnl_pct"),
+        default=None,
+    )
+
+    if gross_pnl_pct is None:
+        return
+
+    net_pnl_pct = _net_pnl_pct(
+        gross_pnl_pct, closed_trade.get("liquidity_label"), real_slippage_pct
+    )
+    position_size = (
+        _safe_float(closed_trade.get("simulated_position_size"), default=50) or 50
+    )
+
+    try:
+        _update_paper_trade(
+            str(closed_trade.get("id")),
+            {
+                "net_pnl_pct": round(net_pnl_pct, 2),
+                "net_pnl_amount": round(position_size * (net_pnl_pct / 100), 2),
+            },
+        )
+    except Exception as exc:
+        logger.warning(
+            "Failed to apply real slippage to paper trade %s: %s",
+            closed_trade.get("id"),
+            exc,
+        )
 
 
 def _build_stale_paper_trade_updates(trade: dict, candles_df) -> dict | None:

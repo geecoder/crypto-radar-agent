@@ -529,3 +529,122 @@ def test_evaluate_open_paper_trade_net_pnl_scales_with_liquidity() -> None:
     assert updates["gross_pnl_pct"] == -5.0
     # Good liquidity: -5.0 - 0.2 (fee) - 0.3 (slippage) = -5.5
     assert updates["net_pnl_pct"] == -5.5
+
+
+def test_net_pnl_pct_uses_real_slippage_when_provided() -> None:
+    # Liquidity label is ignored once real_slippage_pct is supplied.
+    net_pnl = paper_trading._net_pnl_pct(-5.0, "good", real_slippage_pct=2.4)
+
+    assert net_pnl == -5.0 - 0.2 - 2.4
+
+
+def test_net_pnl_pct_falls_back_to_flat_table_without_real_slippage() -> None:
+    net_pnl = paper_trading._net_pnl_pct(-5.0, "thin", real_slippage_pct=None)
+
+    assert net_pnl == -5.0 - 0.2 - 0.8
+
+
+def test_real_slippage_pct_for_trade_sums_both_legs(monkeypatch) -> None:
+    monkeypatch.setattr(paper_trading, "USE_SUPABASE", True)
+    monkeypatch.setattr(
+        paper_trading.supabase_store,
+        "get_shadow_trades_for_paper_trade",
+        lambda paper_trade_id: [
+            {
+                "action": "market_buy",
+                "metadata": {"signal_price": 100.0, "real_fill_price": 100.5},
+            },
+            {
+                "action": "market_sell",
+                "metadata": {"signal_price": 110.0, "real_fill_price": 109.0},
+            },
+        ],
+    )
+
+    real_slippage_pct = paper_trading._real_slippage_pct_for_trade("paper_BTCUSDT_1")
+
+    # Buy: paid 0.5 more than signal (0.5%). Sell: received 1.0 less (~0.909%).
+    assert real_slippage_pct == pytest.approx(0.5 + (1.0 / 110.0 * 100))
+
+
+def test_real_slippage_pct_for_trade_ignores_favorable_legs(monkeypatch) -> None:
+    monkeypatch.setattr(paper_trading, "USE_SUPABASE", True)
+    monkeypatch.setattr(
+        paper_trading.supabase_store,
+        "get_shadow_trades_for_paper_trade",
+        lambda paper_trade_id: [
+            {
+                "action": "market_buy",
+                "metadata": {"signal_price": 100.0, "real_fill_price": 99.0},
+            },
+        ],
+    )
+
+    real_slippage_pct = paper_trading._real_slippage_pct_for_trade("paper_BTCUSDT_1")
+
+    assert real_slippage_pct == 0.0
+
+
+def test_real_slippage_pct_for_trade_returns_none_without_supabase(monkeypatch) -> None:
+    monkeypatch.setattr(paper_trading, "USE_SUPABASE", False)
+
+    assert paper_trading._real_slippage_pct_for_trade("paper_BTCUSDT_1") is None
+
+
+def test_real_slippage_pct_for_trade_returns_none_when_no_shadow_rows(monkeypatch) -> None:
+    monkeypatch.setattr(paper_trading, "USE_SUPABASE", True)
+    monkeypatch.setattr(
+        paper_trading.supabase_store,
+        "get_shadow_trades_for_paper_trade",
+        lambda paper_trade_id: [],
+    )
+
+    assert paper_trading._real_slippage_pct_for_trade("paper_BTCUSDT_1") is None
+
+
+def test_apply_real_slippage_if_available_updates_net_pnl(monkeypatch) -> None:
+    updated = []
+
+    monkeypatch.setattr(
+        paper_trading, "_real_slippage_pct_for_trade", lambda paper_trade_id: 2.0
+    )
+    monkeypatch.setattr(
+        paper_trading,
+        "_update_paper_trade",
+        lambda trade_id, updates: updated.append((trade_id, updates)),
+    )
+
+    closed_trade = {
+        "id": "paper_BTCUSDT_1",
+        "blended_pnl_pct": 10.0,
+        "liquidity_label": "Good",
+        "simulated_position_size": 50,
+    }
+
+    paper_trading._apply_real_slippage_if_available(closed_trade)
+
+    assert len(updated) == 1
+    trade_id, updates = updated[0]
+    assert trade_id == "paper_BTCUSDT_1"
+    # 10.0 - 0.2 (fee) - 2.0 (real slippage) = 7.8
+    assert updates["net_pnl_pct"] == 7.8
+    assert updates["net_pnl_amount"] == pytest.approx(50 * 0.078)
+
+
+def test_apply_real_slippage_if_available_noop_when_no_real_data(monkeypatch) -> None:
+    updated = []
+
+    monkeypatch.setattr(
+        paper_trading, "_real_slippage_pct_for_trade", lambda paper_trade_id: None
+    )
+    monkeypatch.setattr(
+        paper_trading,
+        "_update_paper_trade",
+        lambda trade_id, updates: updated.append((trade_id, updates)),
+    )
+
+    paper_trading._apply_real_slippage_if_available(
+        {"id": "paper_BTCUSDT_1", "pnl_pct": 5.0}
+    )
+
+    assert updated == []

@@ -668,6 +668,29 @@ def insert_shadow_trade(record: dict) -> None:
         connection.close()
 
 
+def get_shadow_trades_for_paper_trade(paper_trade_id: str) -> list[dict]:
+    """Return shadow_trades rows logged for one paper trade (open + close legs)."""
+    connection = get_connection()
+
+    try:
+        with connection:
+            with connection.cursor(cursor_factory=RealDictCursor) as cursor:
+                cursor.execute(
+                    """
+                    SELECT action, symbol, quantity, price, metadata, logged_at
+                    FROM shadow_trades
+                    WHERE metadata->>'paper_trade_id' = %s
+                    ORDER BY logged_at ASC
+                    """,
+                    (paper_trade_id,),
+                )
+                rows = cursor.fetchall()
+    finally:
+        connection.close()
+
+    return [dict(row) for row in rows]
+
+
 def write_system_health(scan_type: str, metadata: dict | None = None) -> None:
     """Record a successful scan heartbeat to system_health."""
     connection = get_connection()
