@@ -33,14 +33,12 @@ class Settings:
     telegram_alerts_enabled: bool = (
         os.getenv("TELEGRAM_ALERTS_ENABLED", "false").lower() == "true"
     )
-    # Hard liquidity floor for paper (and future live) trade eligibility.
-    # Data showed Very thin/Thin coins lose money while Good+ liquidity is
-    # the only profitable tier — see PAPER_MIN_LIQUIDITY gate in paper_trading.py.
-    paper_min_liquidity: str = (
-        os.getenv("PAPER_MIN_LIQUIDITY", "Good").strip() or "Good"
-    )
-    paper_min_tradability_score: int = int(
-        os.getenv("PAPER_MIN_TRADABILITY_SCORE", "55")
+    # Max acceptable adverse slippage (%) for a paper trade's intended position
+    # size, measured by walking the live Binance order book — replaces the old
+    # coarse PAPER_MIN_LIQUIDITY/PAPER_MIN_TRADABILITY_SCORE label-based gates.
+    # See _meets_slippage_gate in paper_trading.py.
+    paper_slippage_budget_pct: float = float(
+        os.getenv("PAPER_SLIPPAGE_BUDGET_PCT", "1.5")
     )
 
 
@@ -57,5 +55,4 @@ USE_SUPABASE = (
     PERSISTENCE_BACKEND.lower() == "supabase"
     and SUPABASE_DATABASE_URL != ""
 )
-PAPER_MIN_LIQUIDITY = settings.paper_min_liquidity
-PAPER_MIN_TRADABILITY_SCORE = settings.paper_min_tradability_score
+PAPER_SLIPPAGE_BUDGET_PCT = settings.paper_slippage_budget_pct

@@ -2,6 +2,8 @@
 
 import json
 
+import pytest
+
 from app.trading import paper_trading
 from app.trading.paper_trading import (
     create_paper_trades_from_alerts,
@@ -9,6 +11,17 @@ from app.trading.paper_trading import (
     should_create_parabolic_paper_trade,
 )
 from app.trading.strategy_config import get_parabolic_paper_strategy
+
+
+@pytest.fixture(autouse=True)
+def _default_hard_gate_passes(monkeypatch):
+    """These tests exercise parabolic eligibility, not the slippage gate —
+    default it to pass so they don't make a real Binance order-book request."""
+    monkeypatch.setattr(
+        paper_trading,
+        "_meets_hard_trade_gates",
+        lambda result, position_size_usd: (True, "Slippage gate passed (stub)."),
+    )
 
 
 def _parabolic_alert() -> dict:

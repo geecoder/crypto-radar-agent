@@ -1,11 +1,25 @@
 """Tests for speculative runner paper-trading risk controls."""
 
+import pytest
+
 from app.trading import paper_trading
 from app.trading.paper_trading import (
     can_create_more_trades_for_alert_type,
     create_paper_trades_from_alerts,
 )
 from app.trading.trade_plan import generate_trade_plan
+
+
+@pytest.fixture(autouse=True)
+def _default_hard_gate_passes(monkeypatch):
+    """These tests exercise speculative-runner risk controls, not the slippage
+    gate — default it to pass so they don't make a real Binance order-book
+    request."""
+    monkeypatch.setattr(
+        paper_trading,
+        "_meets_hard_trade_gates",
+        lambda result, position_size_usd: (True, "Slippage gate passed (stub)."),
+    )
 
 
 def _speculative_runner_result(**overrides) -> dict:

@@ -2,6 +2,8 @@
 
 import json
 
+import pytest
+
 from app.binance.market_filter import select_scan_universe
 from app.diagnostics import format_diagnostic_report
 from app.indicators.explosive_mover import (
@@ -12,6 +14,18 @@ from app.reporting import format_alert_message
 from app.trading import paper_trading
 from app.trading.paper_trading import create_paper_trades_from_alerts
 from app.trading.trade_plan import generate_trade_plan
+
+
+@pytest.fixture(autouse=True)
+def _default_hard_gate_passes(monkeypatch):
+    """These tests exercise speculative-runner trade-plan gating, not the
+    slippage gate — default it to pass so they don't make a real Binance
+    order-book request."""
+    monkeypatch.setattr(
+        paper_trading,
+        "_meets_hard_trade_gates",
+        lambda result, position_size_usd: (True, "Slippage gate passed (stub)."),
+    )
 
 
 def _signal(score: int) -> dict:

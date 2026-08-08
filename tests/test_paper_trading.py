@@ -4,6 +4,7 @@ import json
 from datetime import datetime, timedelta, timezone
 
 import pandas as pd
+import pytest
 
 from app.trading import paper_trading
 from app.trading.paper_trading import (
@@ -11,6 +12,18 @@ from app.trading.paper_trading import (
     evaluate_open_paper_trade,
     should_create_paper_trade,
 )
+
+
+@pytest.fixture(autouse=True)
+def _default_hard_gate_passes(monkeypatch):
+    """Most tests here aren't exercising the slippage gate — default it to pass
+    so they don't make a real Binance order-book request. Tests that need to
+    exercise the gate itself override this within the test."""
+    monkeypatch.setattr(
+        paper_trading,
+        "_meets_hard_trade_gates",
+        lambda result, position_size_usd: (True, "Slippage gate passed (stub)."),
+    )
 
 
 def _eligible_alert() -> dict:
@@ -273,91 +286,116 @@ def test_create_paper_trades_persists_created_and_skipped_decisions(
     assert "below 55" in updated_alerts[1][3]
 
 
-def test_create_paper_trades_blocks_thin_liquidity_without_tradability_score(
+def test_meets_slippage_gate_passes_within_budget(monkeypatch) -> None:
+    monkeypatch.setattr(
+        paper_trading, "fetch_real_fill", lambda symbol, side, quantity: (100.5, 0.05)
+    )
+
+    ok, reason = paper_trading._meets_slippage_gate(
+        {"symbol": "BTCUSDT", "latest_close": 100.0}, 50
+    )
+
+    assert ok is True
+    assert "0.50%" in reason
+
+
+def test_meets_slippage_gate_rejects_over_budget(monkeypatch) -> None:
+    monkeypatch.setattr(
+        paper_trading, "fetch_real_fill", lambda symbol, side, quantity: (103.0, 0.4)
+    )
+
+    ok, reason = paper_trading._meets_slippage_gate(
+        {"symbol": "BTCUSDT", "latest_close": 100.0}, 50
+    )
+
+    assert ok is False
+    assert "slippage" in reason.lower()
+    assert "3.00%" in reason
+
+
+def test_meets_slippage_gate_rejects_when_book_unavailable(monkeypatch) -> None:
+    monkeypatch.setattr(
+        paper_trading, "fetch_real_fill", lambda symbol, side, quantity: (None, None)
+    )
+
+    ok, reason = paper_trading._meets_slippage_gate(
+        {"symbol": "BTCUSDT", "latest_close": 100.0}, 50
+    )
+
+    assert ok is False
+    assert "cannot confirm tradability" in reason.lower()
+
+
+def test_meets_slippage_gate_favorable_fill_is_not_penalized(monkeypatch) -> None:
+    """A fill BELOW the signal price (favorable) must not count as slippage."""
+    monkeypatch.setattr(
+        paper_trading, "fetch_real_fill", lambda symbol, side, quantity: (99.0, 0.05)
+    )
+
+    ok, reason = paper_trading._meets_slippage_gate(
+        {"symbol": "BTCUSDT", "latest_close": 100.0}, 50
+    )
+
+    assert ok is True
+    assert "0.00%" in reason
+
+
+def test_create_paper_trades_blocks_when_slippage_exceeds_budget(
     monkeypatch,
     tmp_path,
 ) -> None:
-    """PAPER_MIN_LIQUIDITY is a hard floor overriding allow_thin_liquidity, unless
-    a tradability_score is available to route the trade into the experiment lane."""
+    """The real-order-book slippage gate replaces the old liquidity-label floor —
+    a Thin/Very-thin coin can still trade if its book actually absorbs the size."""
     trades_file = tmp_path / "paper_trades.json"
     events_file = tmp_path / "paper_trade_events.json"
     alert = _eligible_alert()
-    alert["liquidity_signal"] = {"label": "Thin"}
-    del alert["tradability_signal"]
+    alert["liquidity_signal"] = {"label": "Very thin"}
 
     monkeypatch.setattr(paper_trading, "USE_SUPABASE", False)
     monkeypatch.setattr(paper_trading, "PAPER_TRADES_FILE", str(trades_file))
     monkeypatch.setattr(paper_trading, "PAPER_TRADE_EVENTS_FILE", str(events_file))
+    monkeypatch.setattr(
+        paper_trading,
+        "_meets_hard_trade_gates",
+        lambda result, position_size_usd: (
+            False,
+            "Walking the order book for $50 of BTCUSDT implies 3.00% slippage, "
+            "over the 1.5% budget.",
+        ),
+    )
 
     decisions = paper_trading.create_paper_trades_from_alerts([alert])
 
     assert decisions[0]["decision"] == "ineligible"
     assert decisions[0]["paper_trade_created"] is False
-    assert "PAPER_MIN_LIQUIDITY" in decisions[0]["reason"]
+    assert "slippage" in decisions[0]["reason"].lower()
 
 
-def test_create_paper_trades_routes_thin_liquidity_to_experiment_lane(
+def test_create_paper_trades_allows_thin_liquidity_when_book_absorbs_size(
     monkeypatch,
     tmp_path,
 ) -> None:
-    """Thin/Very-thin coins with a tradability_score reading go to the paper-only
-    experiment lane instead of being rejected outright, so we can observe whether
-    tradability_score predicts NET profitability independent of liquidity_label."""
+    """A Thin-liquidity coin with a real order book deep enough to absorb the
+    position size within budget now trades — this is the HEIUSDT-style fix."""
+    monkeypatch.undo()  # restore the real _meets_hard_trade_gates from the autouse stub
     trades_file = tmp_path / "paper_trades.json"
     events_file = tmp_path / "paper_trade_events.json"
     alert = _eligible_alert()
     alert["liquidity_signal"] = {"label": "Very thin"}
-    alert["tradability_signal"] = {"score": 20}
 
     monkeypatch.setattr(paper_trading, "USE_SUPABASE", False)
     monkeypatch.setattr(paper_trading, "PAPER_TRADES_FILE", str(trades_file))
     monkeypatch.setattr(paper_trading, "PAPER_TRADE_EVENTS_FILE", str(events_file))
+    monkeypatch.setattr(
+        paper_trading, "fetch_real_fill", lambda symbol, side, quantity: (100.2, 0.1)
+    )
 
     decisions = paper_trading.create_paper_trades_from_alerts([alert])
     saved_trades = json.loads(trades_file.read_text(encoding="utf-8"))
 
     assert decisions[0]["decision"] == "created"
     assert decisions[0]["paper_trade_created"] is True
-    assert decisions[0]["strategy_name"] == "tradability_experiment_paper"
-    assert saved_trades[0]["strategy_name"] == "tradability_experiment_paper"
-    assert saved_trades[0]["trade_plan_type"] == "tradability_experiment_paper"
     assert saved_trades[0]["liquidity_label"] == "Very thin"
-    assert saved_trades[0]["simulated_position_size"] == 10
-
-
-def test_experiment_lane_does_not_apply_to_parabolic_alerts() -> None:
-    """Parabolic/Speculative lanes already handle thin liquidity themselves —
-    the experiment lane only applies to standard continuation-style alerts."""
-    alert = _eligible_alert()
-    alert["alert_type"] = paper_trading.PARABOLIC_WATCH_ALERT_TYPE
-    alert["liquidity_signal"] = {"label": "Very thin"}
-    alert["tradability_signal"] = {"score": 80}
-
-    result = paper_trading._tradability_experiment_candidate(
-        alert, paper_trading.PARABOLIC_WATCH_ALERT_TYPE
-    )
-
-    assert result is None
-
-
-def test_create_paper_trades_blocks_low_tradability_score(
-    monkeypatch,
-    tmp_path,
-) -> None:
-    trades_file = tmp_path / "paper_trades.json"
-    events_file = tmp_path / "paper_trade_events.json"
-    alert = _eligible_alert()
-    alert["tradability_signal"] = {"score": 10}
-
-    monkeypatch.setattr(paper_trading, "USE_SUPABASE", False)
-    monkeypatch.setattr(paper_trading, "PAPER_TRADES_FILE", str(trades_file))
-    monkeypatch.setattr(paper_trading, "PAPER_TRADE_EVENTS_FILE", str(events_file))
-
-    decisions = paper_trading.create_paper_trades_from_alerts([alert])
-
-    assert decisions[0]["decision"] == "ineligible"
-    assert decisions[0]["paper_trade_created"] is False
-    assert "PAPER_MIN_TRADABILITY_SCORE" in decisions[0]["reason"]
 
 
 def test_create_paper_trades_logs_shadow_trade_on_open(

@@ -67,7 +67,6 @@ from app.storage.supabase_store import (
 from app.trading.paper_trading import (
     create_paper_trades_from_alerts,
     load_all_paper_trades,
-    TRADABILITY_EXPERIMENT_STRATEGY_NAME,
     update_open_paper_trades,
 )
 from app.trading.strategy_config import get_strategy_by_name
@@ -75,6 +74,11 @@ from app.trading.strategy_config import get_strategy_by_name
 TELEGRAM_TEST_MESSAGE = "✅ Crypto Radar Agent Telegram test message."
 ALERT_THRESHOLD = 60
 GOOD_LIQUIDITY_LABELS = {"good", "strong", "excellent"}
+# Legacy strategy name from the removed tradability-score experiment lane
+# (paper-only, thin-liquidity bypass). No new trades use this name — kept
+# only to exclude the ~31 historical rows from go-live gate math, matching
+# that lane's original "excluded from go-live gate math" design.
+_LEGACY_TRADABILITY_EXPERIMENT_STRATEGY_NAME = "tradability_experiment_paper"
 
 
 def _net_pnl(trade: dict) -> float:
@@ -266,7 +270,7 @@ def _run_go_live_check() -> None:
     closed = [
         t for t in paper_trades
         if t.get("status") == "closed"
-        and t.get("strategy_name") != TRADABILITY_EXPERIMENT_STRATEGY_NAME
+        and t.get("strategy_name") != _LEGACY_TRADABILITY_EXPERIMENT_STRATEGY_NAME
     ]
     last_100 = closed[-100:] if len(closed) >= 100 else closed
 
@@ -316,7 +320,7 @@ def _run_go_live_report() -> None:
     closed = [
         t for t in paper_trades
         if t.get("status") == "closed"
-        and t.get("strategy_name") != TRADABILITY_EXPERIMENT_STRATEGY_NAME
+        and t.get("strategy_name") != _LEGACY_TRADABILITY_EXPERIMENT_STRATEGY_NAME
     ]
 
     # Win rate over last 100 closed trades (NET of fees/slippage).

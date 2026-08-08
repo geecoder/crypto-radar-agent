@@ -12,9 +12,8 @@ from typing import Any
 import pandas as pd
 
 from app.binance.client import klines_to_dataframe
-from app.config import PAPER_MIN_LIQUIDITY, PAPER_MIN_TRADABILITY_SCORE, USE_SUPABASE
-from app.exchange.binance_executor import BinanceExecutor
-from app.indicators.liquidity import meets_liquidity_floor
+from app.config import PAPER_SLIPPAGE_BUDGET_PCT, USE_SUPABASE
+from app.exchange.binance_executor import BinanceExecutor, fetch_real_fill
 from app.risk.risk_manager import RiskConfig, evaluate_trade_risk
 from app.storage import supabase_store
 from app.trading.strategy_config import (
@@ -22,7 +21,6 @@ from app.trading.strategy_config import (
     get_default_paper_trading_strategy,
     get_parabolic_paper_strategy,
     get_speculative_early_runner_strategy,
-    get_tradability_experiment_strategy,
 )
 from app.utils.logger import get_logger
 
@@ -62,13 +60,6 @@ MAX_OPEN_PAPER_TRADES_BY_ALERT_TYPE = {
     "Continuation Alert": 10,
 }
 MAX_TOTAL_OPEN_PAPER_TRADES = 20
-# Paper-only lane that trades Thin/Very-thin coins the liquidity floor would
-# otherwise block, gated only by tradability_score, purely to observe whether
-# tradability_score predicts NET profitability independent of the coarse
-# liquidity label. Excluded from go-live gate math — see app/main.py.
-TRADABILITY_EXPERIMENT_STRATEGY_NAME = "tradability_experiment_paper"
-TRADABILITY_EXPERIMENT_TRADE_PLAN_TYPE = "tradability_experiment_paper"
-MAX_OPEN_TRADABILITY_EXPERIMENT_TRADES = 10
 MAX_HOLD_EXPIRED_EVENT_NOTES = (
     "Closed stale paper trade because max_hold_hours was reached."
 )
@@ -354,25 +345,12 @@ def create_paper_trades_from_alerts(
 
         if eligible:
             hard_gate_ok, hard_gate_reason = _meets_hard_trade_gates(
-                candidate_for_trade
+                candidate_for_trade, selected_strategy.simulated_position_size
             )
 
             if not hard_gate_ok:
-                experiment_candidate = _tradability_experiment_candidate(
-                    candidate_for_trade, alert_type
-                )
-
-                if experiment_candidate is not None:
-                    selected_strategy = get_tradability_experiment_strategy()
-                    candidate_for_trade = experiment_candidate
-                    reason = (
-                        "Blocked by PAPER_MIN_LIQUIDITY floor; routed to the "
-                        "tradability_score experiment lane (paper-only, "
-                        "excluded from go-live gate math)."
-                    )
-                else:
-                    eligible = False
-                    reason = hard_gate_reason
+                eligible = False
+                reason = hard_gate_reason
 
         symbol = str(candidate.get("symbol") or "UNKNOWN")
         trade_plan = _get_trade_plan(candidate_for_trade)
@@ -395,14 +373,6 @@ def create_paper_trades_from_alerts(
         concentration_ok, concentration_reason = (
             can_create_more_trades_for_alert_type(alert_type, open_trades)
         )
-
-        if (
-            concentration_ok
-            and selected_strategy.name == TRADABILITY_EXPERIMENT_STRATEGY_NAME
-            and not _can_create_more_experiment_trades(open_trades)
-        ):
-            concentration_ok = False
-            concentration_reason = "Tradability experiment lane open-trade limit reached."
 
         if not concentration_ok:
             decision.update(
@@ -1316,96 +1286,61 @@ def _get_tradability_score(result: dict) -> Any:
     return tradability_signal.get("score")
 
 
-def _meets_liquidity_gate(result: dict) -> tuple[bool, str]:
-    """Hard liquidity floor applied to every alert type before any trade opens.
+def _meets_slippage_gate(result: dict, position_size_usd: float) -> tuple[bool, str]:
+    """Hard tradability floor: can the real order book absorb this position size?
 
-    Overrides per-strategy allow_thin_liquidity settings: Very thin/Thin
-    liquidity coins lose money in the historical data (-1.25% / -0.73% gross)
-    while Good+ liquidity is the only profitable tier, so no trade may open
-    below the liquidity floor regardless of strategy.
+    Replaces the old coarse PAPER_MIN_LIQUIDITY (24h-volume label) and
+    PAPER_MIN_TRADABILITY_SCORE (24h-ticker spread) gates with a direct
+    measurement — walk the live Binance order book for the intended position
+    size and require the resulting VWAP fill to stay within
+    PAPER_SLIPPAGE_BUDGET_PCT of the signal price. This lets volatile-but-
+    genuinely-tradeable coins in regardless of their 24h-volume label, while
+    still rejecting coins whose book truly can't absorb the size.
+
+    Fails closed (rejects) when the book can't be fetched or lacks enough
+    depth to price — we can't confirm tradability, so we don't trade it. A
+    transient fetch failure just skips this scan cycle; the symbol is
+    re-evaluated next cycle.
     """
-    liquidity_label = str(_get_liquidity_label(result) or "").strip()
+    entry_price = _safe_float(result.get("latest_close"), default=None)
+    symbol = str(result.get("symbol") or "")
 
-    if not meets_liquidity_floor(liquidity_label, PAPER_MIN_LIQUIDITY):
+    if entry_price is None or entry_price <= 0:
+        return False, "Cannot evaluate slippage: missing or invalid signal price."
+
+    if position_size_usd is None or position_size_usd <= 0:
+        return False, "Cannot evaluate slippage: missing or invalid position size."
+
+    quantity = position_size_usd / entry_price
+    real_fill_price, _spread_pct = fetch_real_fill(symbol, "buy", quantity)
+
+    if real_fill_price is None:
         return (
             False,
-            f"Liquidity '{liquidity_label or 'Unknown'}' is below the "
-            f"PAPER_MIN_LIQUIDITY floor of '{PAPER_MIN_LIQUIDITY}'.",
+            f"Order book for {symbol} is unavailable or lacks enough depth to "
+            f"fill ${position_size_usd:.0f} — cannot confirm tradability.",
         )
 
-    return True, "Liquidity gate passed."
+    adverse_slippage_pct = max(0.0, (real_fill_price - entry_price) / entry_price * 100)
 
-
-def _meets_tradability_gate(result: dict) -> tuple[bool, str]:
-    """Hard tradability floor — order-book depth and spread must be tradeable."""
-    tradability_score = _safe_float(_get_tradability_score(result), default=None)
-
-    if tradability_score is None or tradability_score < PAPER_MIN_TRADABILITY_SCORE:
-        score_text = "Unknown" if tradability_score is None else f"{tradability_score:g}"
+    if adverse_slippage_pct > PAPER_SLIPPAGE_BUDGET_PCT:
         return (
             False,
-            f"Tradability score {score_text} is below the "
-            f"PAPER_MIN_TRADABILITY_SCORE floor of {PAPER_MIN_TRADABILITY_SCORE:g}.",
+            f"Walking the order book for ${position_size_usd:.0f} of {symbol} "
+            f"implies {adverse_slippage_pct:.2f}% slippage, over the "
+            f"{PAPER_SLIPPAGE_BUDGET_PCT:g}% budget.",
         )
 
-    return True, "Tradability gate passed."
-
-
-def _meets_hard_trade_gates(result: dict) -> tuple[bool, str]:
-    """Non-negotiable gates applied to every alert type before any paper trade opens."""
-    liquidity_ok, liquidity_reason = _meets_liquidity_gate(result)
-
-    if not liquidity_ok:
-        return False, liquidity_reason
-
-    tradability_ok, tradability_reason = _meets_tradability_gate(result)
-
-    if not tradability_ok:
-        return False, tradability_reason
-
-    return True, "Hard trade gates passed."
-
-
-def _tradability_experiment_candidate(result: dict, alert_type: str) -> dict | None:
-    """Return a result routed into the tradability-score experiment lane, or None.
-
-    Only routes trades blocked purely by the liquidity floor (not a missing or
-    low tradability score) for the standard alert types — Parabolic and
-    Speculative Early Runner already have their own thin-liquidity handling.
-    No tradability_score minimum is applied here on purpose: we need samples
-    across the full score range to find where NET expectancy turns positive.
-    """
-    if alert_type not in PAPER_TRADE_ALLOWED_ALERT_TYPES:
-        return None
-
-    liquidity_ok, _ = _meets_liquidity_gate(result)
-
-    if liquidity_ok:
-        return None
-
-    if _safe_float(_get_tradability_score(result), default=None) is None:
-        return None
-
-    return {
-        **result,
-        "trade_plan": {
-            **_get_trade_plan(result),
-            "trade_plan_type": TRADABILITY_EXPERIMENT_TRADE_PLAN_TYPE,
-        },
-    }
-
-
-def _can_create_more_experiment_trades(open_trades: list[dict]) -> bool:
-    """Return whether the tradability experiment lane is under its open-trade cap."""
-    active_experiment_trades = sum(
-        1
-        for trade in open_trades
-        if isinstance(trade, dict)
-        and str(trade.get("status", "open")).lower() == "open"
-        and trade.get("strategy_name") == TRADABILITY_EXPERIMENT_STRATEGY_NAME
+    return (
+        True,
+        f"Slippage gate passed ({adverse_slippage_pct:.2f}% <= "
+        f"{PAPER_SLIPPAGE_BUDGET_PCT:g}%).",
     )
 
-    return active_experiment_trades < MAX_OPEN_TRADABILITY_EXPERIMENT_TRADES
+
+def _meets_hard_trade_gates(result: dict, position_size_usd: float) -> tuple[bool, str]:
+    """Non-negotiable gate applied to every alert type before any paper trade opens."""
+    return _meets_slippage_gate(result, position_size_usd)
 
 
 def _get_quote_volume(result: dict) -> Any:
