@@ -58,7 +58,12 @@ def test_select_liquid_majors_universe_ranks_by_volume_and_filters_spread() -> N
     }
     client = _FakeClient(tickers, order_books)
 
-    universe = lmb.select_liquid_majors_universe(client, top_n=5, max_spread_pct=0.05)
+    # candidate_symbols=None: test synthetic symbol names (WIDEUSDT) aren't
+    # in the real curated MAJOR_CANDIDATE_SYMBOLS list, so this opts out of
+    # that restriction to exercise the spread-filtering logic itself.
+    universe = lmb.select_liquid_majors_universe(
+        client, top_n=5, max_spread_pct=0.05, candidate_symbols=None
+    )
 
     symbols = [entry["symbol"] for entry in universe]
     assert symbols == ["BTCUSDT", "ETHUSDT"]  # ranked by volume, WIDE and USDC excluded
@@ -68,6 +73,25 @@ def test_select_liquid_majors_universe_ranks_by_volume_and_filters_spread() -> N
 def test_select_liquid_majors_universe_skips_symbols_with_book_errors() -> None:
     tickers = [_ticker("BTCUSDT", 900_000_000), _ticker("BROKENUSDT", 800_000_000)]
     order_books = {"BTCUSDT": _book(100000, 100002)}
+    client = _FakeClient(tickers, order_books)
+
+    universe = lmb.select_liquid_majors_universe(client, top_n=5, candidate_symbols=None)
+
+    assert [e["symbol"] for e in universe] == ["BTCUSDT"]
+
+
+def test_select_liquid_majors_universe_restricts_to_curated_candidates_by_default() -> None:
+    # A small-cap alt spiking in 24h volume should NOT be admitted as a
+    # "major" just because it outranks real majors today -- this is the
+    # exact failure this default guards against (see module docstring).
+    tickers = [
+        _ticker("BTCUSDT", 100_000_000),
+        _ticker("SOMEPUMPUSDT", 900_000_000),  # not in MAJOR_CANDIDATE_SYMBOLS
+    ]
+    order_books = {
+        "BTCUSDT": _book(100000, 100002),
+        "SOMEPUMPUSDT": _book(1, 1.001),
+    }
     client = _FakeClient(tickers, order_books)
 
     universe = lmb.select_liquid_majors_universe(client, top_n=5)

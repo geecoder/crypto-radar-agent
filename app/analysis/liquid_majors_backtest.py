@@ -28,12 +28,29 @@ from app.analysis.trend_following import detect_donchian_breakout_signals, detec
 from app.risk.risk_manager import compute_position_size
 from app.trading.paper_trading import ROUND_TRIP_FEE_PCT
 
-# Stablecoin/fiat base assets excluded from the "liquid majors" universe --
-# a stablecoin-USDT pair isn't a trading opportunity in the sense this test
-# cares about (no real price trend or reversion to exploit).
+# Stablecoin/fiat/commodity-backed base assets excluded from the "liquid
+# majors" universe -- not a trading opportunity in the sense this test cares
+# about (no real price trend or reversion to exploit against USDT).
 STABLE_BASE_ASSETS = {
     "USDC", "FDUSD", "TUSD", "DAI", "USDP", "PAX", "USTC", "BUSD", "EUR", "GBP", "AEUR",
+    "USD1", "RLUSD", "EURI", "XAUT", "PAXG", "USDE", "USDS",
 }
+
+# A curated, stable list of well-established large-cap coins -- deliberately
+# NOT derived from a live 24h-volume ranking. Ranking by today's volume lets
+# a small-cap alt having a pump-of-the-day spike masquerade as a "major"
+# (confirmed: an earlier run of this exact selection pulled in HEIUSDT,
+# TUTUSDT, EPICUSDT, KAITOUSDT and other names from the already-falsified
+# alt universe, purely because they happened to spike in volume that day).
+# select_liquid_majors_universe still ranks and filters WITHIN this list by
+# real-time volume/spread/depth -- it just never reaches outside it.
+MAJOR_CANDIDATE_SYMBOLS = [
+    "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "ADAUSDT", "DOGEUSDT",
+    "TRXUSDT", "LINKUSDT", "AVAXUSDT", "DOTUSDT", "MATICUSDT", "POLUSDT", "LTCUSDT",
+    "BCHUSDT", "ATOMUSDT", "UNIUSDT", "ETCUSDT", "XLMUSDT", "NEARUSDT", "APTUSDT",
+    "ICPUSDT", "FILUSDT", "HBARUSDT", "VETUSDT", "ARBUSDT", "OPUSDT", "SUIUSDT",
+    "TONUSDT", "SHIBUSDT", "INJUSDT",
+]
 
 # Deliberately tight -- real majors typically show well under this; anything
 # wider suggests the "liquid" assumption doesn't hold for that symbol today.
@@ -57,20 +74,32 @@ def select_liquid_majors_universe(
     top_n: int = 25,
     max_spread_pct: float = DEFAULT_MAX_SPREAD_PCT,
     order_book_limit: int = 20,
+    candidate_symbols: list[str] | None = MAJOR_CANDIDATE_SYMBOLS,
 ) -> list[dict]:
-    """Rank USDT pairs by 24h quote volume, then confirm each candidate's
-    CURRENT order book has a tight spread and real depth before including it.
+    """Rank candidate USDT pairs by 24h quote volume, then confirm each
+    candidate's CURRENT order book has a tight spread and real depth before
+    including it.
+
+    `candidate_symbols` restricts the pool to a fixed, curated list of
+    established large-cap coins (MAJOR_CANDIDATE_SYMBOLS) by default --
+    ranking is still done by real-time volume/spread/depth, but the pool
+    itself never reaches outside that curated list, so a small-cap alt
+    having a pump-of-the-day volume spike can't masquerade as a "major."
+    Pass candidate_symbols=None to instead rank across every USDT pair
+    Binance lists (the old, volume-only behavior).
 
     Returns a list of dicts (symbol, quote_volume_24h, spread_pct,
     top10_ask_depth_usd), best-volume-first, capped at `top_n` entries that
     pass the spread check.
     """
     tickers = client.get_24hr_tickers()
+    candidate_set = set(candidate_symbols) if candidate_symbols is not None else None
     usdt_pairs = [
         ticker
         for ticker in tickers
         if str(ticker.get("symbol") or "").endswith("USDT")
         and _base_asset(str(ticker.get("symbol"))) not in STABLE_BASE_ASSETS
+        and (candidate_set is None or ticker.get("symbol") in candidate_set)
     ]
     ranked = sorted(
         usdt_pairs,
